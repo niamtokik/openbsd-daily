@@ -336,177 +336,192 @@ it might be worthwhile to ask if we want this documented in pf(4) man
 page src/sys/net/pf_ioctl.c is inside the kernel
 ______________________________________________________________________
 
- ok going back to userland pfctl
- 
- we can go quite quickly thorugh the remaining pfctl_* functions
- disable, clear_stats
- etc
- they call ioctls on the device
- and print back feedback to the user
- we know where to check whach each one does
- and where to check why an errno was set
- I'm slowly scrolling throuhg, trying to find anything that might be out of place
- but not digging too deep yet, as most are just ioctl call plus some string mangling for output
- and finally main on line 2208
- again a bunch of flags for getopt parsing
- getopt itself
- then some fine grained command handling
- for anchors
- and on line 2400 we actually open the /dev/pf device
+
+Ok going back to userland `pfctl`. We can go quite quickly through the
+remaining `pfctl_*` functions, disable, clear_stats, etc... They call
+ioctls on the device and print back feedback to the user.  We know
+where to check whach each one does and where to check why an errno was
+set.  I'm slowly scrolling through, trying to find anything that might
+be out of place but not digging too deep yet, as most are just ioctl
+call plus some string mangling for output and finally `main` function
+on line 2208.  Again a bunch of flags for getopt parsing, getopt
+itself, then some fine grained command handling for anchors. On line
+2400 we actually open the `/dev/pf` device
+
+______________________________________________________________________
+
 21:20 <@mikeb> a lot of people don't know you can do pctl -a '*' -sr
- mikeb: interesting, I think that's an explicit example in the man page
+
+interesting, I think that's an explicit example in the man page
+
 21:21 <@mikeb> fair enough :)
- To print the main ruleset recursively, specify only '*' as the anchor name:
- # pfctl -a '*' -sr
- under pfctl(8) -a
- line 2416 are display options
- grabbing various stats and state information
- in 2482 we list our rules, I assume those are already expanded
- vs the compacted format of /etc/pf.conf
- then we have various clear rules
- to zero out state
- line 2527 state killers, my fav
- when adding a spammer to your children tale
- *table
- he still can have multiple open connections
- since pf is stateful
- adding that IP to the children table will prevent new connections but won't remove existing ones
- to do that, yone invokes pfctl -k IP
- which will kill all already established connections from that source
- we have some more option parsing along the way, and finally a pfctl_state_store and pfctl_state_load
+
+To print the main ruleset recursively, specify only '*' as the anchor
+name:
+
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+pfctl -a '*' -sr
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+under `pfctl(8)`
+______________________________________________________________________
+
+Line 2416 are display options, grabbing various stats and state
+information.  In 2482 we list our rules, I assume those are already
+expanded versus the compacted format of `/etc/pf.conf`. Then we have
+various clear rules, to zero out state.
+
+Line 2527 state killers, my favorite, when adding a spammer to your
+children table, he still can have multiple open connections. Since pf
+is stateful, adding that IP to the children table will prevent new
+connections but won't remove existing ones
+ 
+To do that, you can invokes:
+
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+pfctl -k ${IP_ADDRESS}
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+which will kill all already established connections from that
+source. We have some more option parsing along the way, and finally a
+`pfctl_state_store` and `pfctl_state_load`.
+
+______________________________________________________________________
+
 21:26 < BlackFrog> Which source are you reviewing?  pfctl.c or pf.c?  Because I couldn't find the state killers, your fav
- pfctl.c
-21:26 < fyuuri> Will the review of rebound still be at 18 UTC?
- review of rebound depends on duncaen he said he will try to do it after one of my reviews but didn't give a date/time
-21:27 < fyuuri>  ok thank you.
-21:28 < BlackFrog> thanks, but the http://code.metager.de/source/xref/OpenBSD/src/sbin/pfctl/pfctl.c doesn't have line 2527
-21:28 -!- Irssi: Pasting 6 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+
+`pfctl.c`
+ 
+21:28 < BlackFrog> thanks, but the
+http://code.metager.de/source/xref/OpenBSD/src/sbin/pfctl/pfctl.c
+doesn't have line 2527
+
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
  $ doas pfctl -S test.state 
- $ ls -alh test.state                                                                                                                                                                            
+ $ ls -alh test.state
  -rw-r--r--  1 root  mulander  22.9K Jun 10 21:28 test.state
- $ file test.state                                                                                                                                                                               
+ $ file test.state
  test.state: data
- $ 
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
  BlackFrog: uhm, not sure what that site is and how old of a code base it has
-21:29  * mulander looks at header
+
+You can looks at header:
+
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
  - /*$OpenBSD: pfctl.c,v 1.332 2015/12/10 17:27:00 mmcc Exp $ */
  my file
  - /*$OpenBSD: pfctl.c,v 1.344 2017/05/30 12:13:04 henning Exp $ */
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 21:29 <@mikeb> BlackFrog: just use https://github.com/openbsd/src/blob/master/sbin/pfctl/pfctl.c
  that site has outdated code
  yep, use what mikeb pointed at ^
+
 21:30 < BlackFrog> thanks for the link
 21:30 < bluewizard> cd ..
 21:30 < DuClare> Or checkout the repo and enjoy the ability to grep all across it :)
  ok the output I pasted
  was me checking out how -S dumping state to a file works
 21:30 <@mikeb> or this from soviet union for the cross-reference: http://bxr.su/OpenBSD/sbin/pfctl/pfctl.c
- it might be fun to investigate what that file is on some future code read
- this pretty much covers our reading window for today
- --- DONE ---
+______________________________________________________________________
 
+== Second Part
 
+Main file to go over today
+https://github.com/openbsd/src/blob/master/sys/net/pf_ioctl.c.  We
+know that pf is controlled from userland by calling `ioctl(2)` on the
+`/dev/pf` pseudo-device http://man.openbsd.org/pf - defines all
+available ioctl commands. We won't be recreating that manual there, so
+please look stuff up when needed
 
-20:04 [Users #openbsd-daily]
-20:04 [@akfaew        ] [ bch         ] [ ebag         ] [ kittens  ] [ norakam  ] [ stateless     ] 
-20:04 [@brynet        ] [ benpicco    ] [ edlm10       ] [ kl3      ] [ oldlaptop] [ swankier      ] 
-20:04 [@dlg           ] [ biniar      ] [ electricto4d ] [ kpcyrd   ] [ owa      ] [ tarug0        ] 
-20:04 [@duncaen       ] [ BlackFrog   ] [ entelechy    ] [ kraucrow ] [ phy1729  ] [ taschenraeuber] 
-20:04 [@fcambus       ] [ bluewizard  ] [ erethon      ] [ kysse    ] [ poptart  ] [ tdjones       ] 
-20:04 [@mikeb         ] [ brianpc     ] [ fcbsd        ] [ lteo[m]  ] [ Putti    ] [ tdmackey      ] 
-20:04 [@mulander      ] [ brianritchie] [ filwishe1    ] [ lucias   ] [ qasa     ] [ Technaton     ] 
-20:04 [@qbit          ] [ bruflu      ] [ fuyuuri      ] [ mandarg  ] [ qbit[m]  ] [ thrym         ] 
-20:04 [@t_b           ] [ bsdtux      ] [ geetam       ] [ mattl    ] [ quinq    ] [ timclassic    ] 
-20:04 [ acgissues     ] [ cengizIO    ] [ ggg`         ] [ metadave ] [ rabbitear] [ TuxOtaku      ] 
-20:04 [ administraitor] [ corbyhaas   ] [ ghostyy      ] [ mfgmfg   ] [ radio2034] [ vbarros       ] 
-20:04 [ afics         ] [ coversine   ] [ gshrikant    ] [ monsieurp] [ rain1    ] [ veonik        ] 
-20:04 [ akkartik      ] [ davl        ] [ harrellc00per] [ MurphSlaw] [ rajak    ] [ vyvup         ] 
-20:04 [ albongo       ] [ deei        ] [ IcePic       ] [ nacci    ] [ rnelson  ] [ whyt          ] 
-20:04 [ antranigv     ] [ Dhole       ] [ imaginary    ] [ nacelle  ] [ S007     ] [ wilornel      ] 
-20:04 [ ar            ] [ dostoyesvky ] [ iomotoko     ] [ nailyk   ] [ sdafsd   ] [ wodim         ] 
-20:04 [ asie          ] [ Dowzee      ] [ jaypatelani  ] [ ned      ] [ selckin  ] [ WubTheCaptain ] 
-20:04 [ azend|vps     ] [ DrPete      ] [ jbernard     ] [ Nemo_bis ] [ skrzyp   ] [ xcko          ] 
-20:04 [ babasik122    ] [ dsp         ] [ jnu          ] [ Niamkik  ] [ smiles`  ] [ xor29ah       ] 
-20:04 [ bcd           ] [ DuClare     ] [ kAworu       ] [ noexcept_] [ Soft     ] [ zyklon        ] 
-20:04 -!- Irssi: #openbsd-daily: Total of 120 nicks [9 ops, 0 halfops, 0 voices, 111 normal]
- -- code read: pf ioctl --
-20:04 < vyvup> inside kernel or pfctl?
- *** goal: continue our code read for pf, overview on what ioctls are available and how they are implemented ***
- vyvup: in between with a tendency to look on kernel side
-20:05 < vyvup> k
- main file to go over today
- https://github.com/openbsd/src/blob/master/sys/net/pf_ioctl.c
- we know that pf is controlled from userland by calling ioctl(2) on the /dev/pf pseudo-device
- http://man.openbsd.org/pf - defines all available ioctl commands
- we won't be recreating that manual there, so please look stuff up when needed
-20:06 < vyvup> btw, is there a guideline when ioctls/device is used or a syscall for communication with the kernel?
- I don't know if there's an official rule/preference, there are however some caveats with ioctls
- since they operate on a device you would need a file descriptor to talk with the kernel
- in some cases you coud not be able to open those or be at a limit
+______________________________________________________________________
+
+20:06 < vyvup> btw, is there a guideline when ioctls/device is used or
+               a syscall for communication with the kernel?
+
+I don't know if there's an official rule/preference, there are however
+some caveats with ioctls since they operate on a device you would need
+a file descriptor to talk with the kernel in some cases you coud not
+be able to open those or be at a limit
+
 20:09 < vyvup> yeah like in the /dev/random case
- I also *assume* sysctls would be faster as one layer less
- note I'm very new to kernel developent, practically learning with all of you here :)
- you might want to read on sysctl(3) man page and ioctl(2)
+
+I also *assume* sysctls would be faster as one layer less
+
+[NOTE] I'm very new to kernel developent, practically learning with
+all of you here :)
+
+you might want to read on sysctl(3) man page and ioctl(2)
+
 20:10 < vyvup> np, discussing it is already helpful
- ok let's go over the source
- standard includes
- for the first time we see some conditional includes
-20:14  * bsdtux waves hello everyone
- for INET6 and NPFSYNC
- I'm wondering where are those from (kernel config?) and what's the default
- so I will do a quick grep for those 2 values over the whole source
-20:15 < vyvup> aren't they set using the kernel config file?
-20:16 < vyvup> GENERIC config file -> config GENERIC -> headers and stuff defining these?
- I assume so, but checking
- I see a bunch of conf files defining the INET6 option
- but none defining NPFSYNC
-20:23 < BlackFrog> Shouldn't we make INET6 the default
-20:23 < BlackFrog> move away from ipv4
- inet6 is compiled in by default on the generic kernel
-20:25 < dsp> but it's goog that you can turn it off if you want. the other way around would be awkward for now with the majority of deployments being v4.
-20:25 < dsp> s/goog/good/
- can't quickly find where NPFSYNC is defined, let's move on to not stall on the headers
- next we have forward declarations, two structs to storepf rules
- a pf_trans_set struct
- a bunch of defines for a bitmask
+
+______________________________________________________________________
+
+
+Standard includes, for the first time we see some conditional
+includes, for INET6 and NPFSYNC. I'm wondering where are those from
+(kernel config?) and what's the default. So I will do a quick grep for
+those 2 values over the whole source. I see a bunch of conf files
+defining the INET6 option but none defining NPFSYNC, can't quickly
+find where NPFSYNC is defined, let's move on to not stall on the
+headers. Next we have forward declarations, two structs to storepf
+rules, a pf_trans_set struct, a bunch of defines for a bitmask
+ 
 20:27 < dsp> interesting that it has a TAG_ID_MAX althgouh it uses the tailq
 20:27 < dsp> it could be a relic from a more static like array impl.
 20:28 < dsp> it is used in tagname2tag where the whole queue is traversed. tha max is fetched,incremented and compared to that TAG_ID_MAX
- perhaps more is unrealistic or performs badly, 50k is a lot of rules
- ah it's not even for rules but for tags
+
+
+perhaps more is unrealistic or performs badly, 50k is a lot of rules
+ah it's not even for rules but for tags
+ 
 20:30 < dsp> also since this tagname2tag function returns u16t it should be bounded by 65535 which is close enough
- a tag is like a variable
- tag string
- Packets matching this rule will be tagged with the specified string. The tag acts as an internal marker that can be used to identify these packets later on. This can be used, for example, to provide trust between interfaces and to determine if packets have been processed by translation rules. Tags are "sticky", meaning that the packet will be tagged even if the rule is not the last matching rule. 
- Further matching rules can replace the tag with a new one but will not remove a previously applied tag. A packet is only ever assigned one tag at a time. Tags take the same macros as labels (see above).
- ---
- so you can have a rule grabbing some traffic, name it and re-use it later
- I can't see anyone reasonably using 50k named tags in a pf conf
- https://github.com/openbsd/src/commit/1ffa893a1e66327e61bcedf0e975cdcdf09a7d33
- the limit was there from the start.
-20:32 < dsp> would be interesting in trying to exhaust tags it whith evil enough rules ;) but that's out of the scope of this chat i suppose ;)
-20:32 < dsp> thanks mulander. good point
- dsp: that would be a self attack :)
- the admin would have to generate a pf.conf file with that many tags and load it
-20:33 < dsp> fully agree on that ;)
- here's home work for you, check how parse.y in smtpctl handles tags
- it might also have a limit on the parsing side.
-20:34 < rain1> based on https://github.com/openbsd/src/blob/master/sys/net/pf_ioctl.c#L2550 it looks like what'll happen is it'll retun "EBUSY" if you have the rules filled up
- which is called in DIOCADDRULE
- ok but let's continue
- there's a WITH_PF_LOCK, a read write lock on the pf code
+
+ a tag is like a variable,
+
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tag string
+ 
+ Packets matching this rule will be tagged with the specified
+ string. The tag acts as an internal marker that can be used to
+ identify these packets later on. This can be used, for example, to
+ provide trust between interfaces and to determine if packets have
+ been processed by translation rules. Tags are "sticky", meaning that
+ the packet will be tagged even if the rule is not the last matching
+ rule.
+ 
+ Further matching rules can replace the tag with a new one but will
+ not remove a previously applied tag. A packet is only ever assigned
+ one tag at a time. Tags take the same macros as labels (see above).
+ 
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+So you can have a rule grabbing some traffic, name it and re-use it
+later I can't see anyone reasonably using 50k named tags in a pf conf.
+https://github.com/openbsd/src/commit/1ffa893a1e66327e61bcedf0e975cdcdf09a7d33
+Rhe limit was there from the start.
+
+Here's home work for you, check how `parse.y` in `smtpctl` handles
+tags. It might also have a limit on the parsing side. Which is called
+in DIOCADDRULE. There's a WITH_PF_LOCK, a read write lock on the pf code,
  this was added a week ago
  and is part of the ongoing work to rid the kernel lock from OpenBSD
- https://github.com/openbsd/src/commit/956659a2c9191e0927b4f56584d8209ea85115f5
- then we are at pf_attach
- pool-init comes from sys/kern/subr_pool.c
-20:38 -!- Irssi: Pasting 5 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+ https://github.com/openbsd/src/commit/956659a2c9191e0927b4f56584d8209ea85115f5.
+ Then we are at `pf_attach`.
+ pool-init comes from `sys/kern/subr_pool.c`
+ 
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   * Initialize the given pool resource structure.
   *
   * We export this routine to allow other kernel parts to declare
   * static pools that must be initialized before malloc() is available.
- line 49 of that file describes what this API is used for
-20:39 -!- Irssi: Pasting 9 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Line 49 of that file describes what this API is used for
+
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   * Pool resource management utility.
   *
   * Memory is allocated in pages which are split into pieces according to
@@ -517,163 +532,67 @@ ______________________________________________________________________
   * header. The memory for building the page list is either taken from
   * the allocated pages themselves (for small pool items) or taken from
   * an internal pool of page headers (`phpool').
- we create pools for rules, states, queues etc.
- hfsc_initialize
- uses the API from sys/net/hfsc.c
- this is a hierarchical fair service curve
- I'm assuming used for traffic shaping
- pfr_initialize
- from pf_table.c for handling tables in pf
- pfi_initialize from pf_if.c for interface handling
- pf_osfp_initialize - for p0f os fingerprinting
-20:47 < dsp> mulander: sorry internet crapped out on me. no smptd parse.y doesn't seem to care about num of tags. thanks for making me look at yacc code after 10yrs.
- :D
- dsp: well, generte a pf file with >50k tags and see if pfctl segfaults or misbehaves in any way
- as it will get an EBUSY reply from the ioctl
-20:49 < dsp> guys sorry have to get back to real world. keep up the studying. will catch the  logs later. mulander will msg you later to see how that went. will try to get it later today.
- dsp: thanks for paticipating, and not afraid of yacc shaving
-20:49 < dsp> and i need to also create traffic that will match it i suppose ;) there is a rule optimised that we have to fool too.
-20:49 < dsp> s/optimised/optimiser/
- pool_sethardlimit - optionally limits the states pf uses
-20:52 <@duncaen> strlcpy(a->v.rtlabelname, "?", sizeof(a->v.rtlabelname));
-20:54 <@duncaen> not sure if its worth changing, but sometimes tag names are copied with strlcpy and the length as sizeof(tag->name) and sometimes PF_TAG_NAME_SIZE
- DuClare: well in your example rtlabelname is a RTLABEL_LEN char
- both are correct
- DuClare: sorry, wanted to highlight duncaen :)
-20:58 <@duncaen> different "issues", the strlcpy for one char is a bit useless
- it's consistent with the second branch and you don't need to remember on null termination though.
-21:00 <@duncaen> thats true
- I can't find what atop does and where it's defined.
- the only close thing I found was at libexec
- libexec/spamd-setup/spamd-setup.c
- but that doesn't seem to be it
- I'm talking about the check in L176
-21:01 < rain1> #define	atop(x) ((x) >> PAGE_SHIFT)
-21:01 < rain1> https://github.com/openbsd/src/blob/5271000b44abe23907b73bbb3aa38ddf4a0bce08/sys/uvm/uvm_param.h#L81
- ok I see why my search failed
- thanks rain1 
- so I tend to grep for ^fn
- as by style(9) function are defined as
- rettype\n
- name(args)
- so grep ^name is quick way to find a function without the noise
- but obviousy fails for macros.
- *obviously
-21:03 < DuClare> So the second thing to grep for is obviously define.*fn
-21:03 < DuClare> :)
- yup :)
- ok next we define 2 red black trees
- ne for src address tracking
- second one for anchors
- we initialize the ruleset
-21:04 <@duncaen> http://netbsd.gw.com/cgi-bin/man-cgi?atop+9+NetBSD-current
- initialize our queues
-21:04 < vyvup> the atop check is for checking for small memory systems and setting up a limit for those?
- sys/net/pfvar.h
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+We create pools for rules, states, queues, etc.  `hfsc_initialize`
+uses the API from sys/net/hfsc.c. This is a hierarchical fair service
+curve.  I'm assuming used for traffic shaping. `pfr_initialize` from
+`pf_table.c` for handling tables in `pf` `pfi_initialize` from
+`pf_if.c` for interface handling `pf_osfp_initialize` - for p0f os
+fingerprinting. `pool_sethardlimit` - optionally limits the states pf uses
+
+I can't find what atop does and where it's defined. the only close
+thing I found was at libexec `libexec/spamd-setup/spamd-setup.c` but
+that doesn't seem to be it. I'm talking about the check in L176
+ 
+So I tend to grep for `^fn` as by style(9) function are defined as
+`rettype\n`, `name(args)`. So grep `^name` is quick way to find a
+function without the noise but obviously fails for macros.
+
+Ok next we define 2 red black trees, one for src address tracking, and
+second one for anchors. We initialize the ruleset
+
+`sys/net/pfvar.h`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
  1385:#define PFR_KENTRY_HIWAT_SMALL     100000  /* Number of entries for tiny hosts */
- yes
- L189 mentions garbage collection
- I didn't knew pf internally had one
-21:06 < vyvup> btw, I'm using the indexed code at bxr.su, makes it very easy to find those symbols
-21:06 < vyvup> e.g. http://bxr.su/OpenBSD/sys/net/pf_ioctl.c#pfopen
- then we initialize default timeouts
- pf_normalize_init
- for initializing the subsystem responsible for packet normalization
- bzero'ing the pf_status struct
- and an interesting XXX comment
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Line 189 mentions garbage collection. I didn't knew pf internally had one. Then we initialize default timeouts with `pf_normalize_init` for initializing the subsystem responsible for packet normalization. Bzero'ing the pf_status struct and an interesting `XXX` comment:
+
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
  228    /* XXX do our best to avoid a conflict */
  229    pf_status.hostid = arc4random();
- worht to have in mind when we see hostid to see what conflicts we are talking about here
- and we schedule creation of a kernel thread
- with the name of pfpurge defined in L236
- the thread itself lives in http://bxr.su/OpenBSD/sys/net/pf.c#1202
-21:12 < vyvup> some info about hostid: http://man.openbsd.org/pf.4#DIOCSETHOSTID
- it sleeps, grabs the network lock, then the pf lock, and removes expired states and types
-21:12 < Niamkik> hum, so, OpenBSD Packet Filter is multi-threaded?
-21:12 < vyvup> apparently for pfsync, keeping track which host a rule originated
-21:12 < kl3> Niamkik: no
-21:14 < vyvup> kernel threads are processes that live inside the kernel
- # ps -auxk | grep pf
- root     36716  0.0  0.0     0     0 ??  DK    10:41AM    0:03.12 (pfpurge)
- shows our kernel pfpurge thread
-21:15 < Niamkik> ok!
-21:15 < Niamkik> thanks :)
- the -k flag reveals kernel threads in ps
- pfopen opens up the device
- ENXIO represents a 'device not configured' error
- pfclose - closes our device
- pf_rm_rule , rule removal
-21:17 < vyvup> apparently there can only be one pf device
- why would you need more?
- /dev/pf controls your kernels pf
- you have multiple interfaces for logging
-21:18 < vyvup> you wouldn't, but it is a special property of this device
-21:18 < vyvup> so different than other devices in this regard
-21:18 < vyvup> (of course there are some other pseudo devs with the same property)
-21:18 < vyvup> or maybe it's a property of all pseudo-devs, that I'm not sure of
- pf_rm_rule drops the rule and everything related to it.
- pf purge rule call pf_rm_rule and does additional ref counting
- it's also called from the context of our kernel purge thread
- tagname2tag is converting a named tag to an identifier
- tag2tagname does the reverse
- tag_unfref deletes a tag
- pf_tag* functions are wrappers for the above
- next we have label handling functions
- pf_q* functions are reusing the tag mechanism for queue naming it apperas.
- *appears
- next we have rules application and rollback followed by queue removal code
- theres a queue interface struct and pf_ifp2q converting an interface to a pf_queue interface
-21:26 -!- Irssi: Pasting 6 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
- 559struct pf_queue_if {
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+worth to have in mind when we see hostid to see what conflicts we are
+talking about here and we schedule creation of a kernel thread with
+the name of pfpurge defined in Line 236. The thread itself lives in
+http://bxr.su/OpenBSD/sys/net/pf.c#1202. `pfopen` opens up the device.
+`ENXIO` represents a 'device not configured' error `pfclose` - closes
+our device `pf_rm_rule` , remove rules.
+ 
+`pf_rm_rule` drops the rule and everything related to it.  `pf` purge
+rule call `pf_rm_rule` and does additional ref counting.  It's also
+called from the context of our kernel purge thread.  `tagname2tag` is
+converting a named tag to an identifier.  `tag2tagname` does the
+reverse.  `tag_unfref` deletes a tag.  `pf_tag*` functions are
+wrappers for the above.
+
+Next we have label handling functions,
+`pf_q*` functions are reusing the tag mechanism for queue naming it appears.
+
+Next we have rules application and rollback followed by queue removal
+code.  There's a queue interface struct and `pf_ifp2q` converting an
+interface to a `pf_queue` interface
+
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 559 struct pf_queue_if {
  560    struct ifnet        *ifp;
  561    const struct ifq_ops    *ifqops;
  562    const struct pfq_ops    *pfqops;
  563    void            *disc;
  564    struct pf_queue_if  *next;
- 565};
- an interesting feature (and very common in the kernel)
- pf_queue_if wraps another struct with additional data
- yet we can cast from pf_queue_if to ifnet and back
- if we have a pointer to any one of them and know that the cast is valid
-21:28 < DuClare> What struct does it wrap?
-21:28 < DuClare> I only see it having pointers.
- ifnet
- what I mean by that you can do:
- pf_queue_if a;
- ifnet b = a->ifp;
- pf_queue_if c;
- c = (pf_queue_if)b;
- you can get back a pf_queue_if from the embedded field
- since the standard guarantees they both start at the same memory address
-21:30 < DuClare> Again it doesn't wrap ifnet, it just contains a pointer to an ifnet
- bad wording on my part
-21:31 < DuClare> You can't cast a struct ifnet to a struct pf_queue_if
-21:31 < DuClare> That's as nonsencial as a cast can get
- I saw such casts in the athn usb driver
-21:32 < DuClare> I think you saw something a little different
-21:32 < DuClare> Ah yes the softc casts
- yes
-21:32 < DuClare> That is a little different
- can you elaborate? I don't want to mislead
-21:34 < Niamkik> do you have reference to athn code? I'm a bit curious
-21:34 < Niamkik> (well, the line :p)
- http://bxr.su/OpenBSD/sys/dev/usb/if_athn_usb.c
- http://bxr.su/OpenBSD/sys/dev/usb/if_athn_usb.c#291 for a sample cast
-21:36 < Niamkik> ok thanks
- there's no athn_usb_softc passed to athn_usb_attachhook
- you get a struct device
-21:37 < DuClare> struct athn_softc literally does wrap a struct device
-21:37 < DuClare> struct athn_softc {
-21:37 < DuClare>         struct device                   sc_dev;
-21:37 < DuClare> ...
-21:37 < DuClare> in dev/ic/athnvar.h
-21:37 < vyvup> the difference is the pointer
- DuClare: thanks for spotting
-21:37 < DuClare> In turn, struct athn_usb_softc {
-21:37 < DuClare>         struct athn_softc               sc_sc;
-21:37 < DuClare> ...
-21:38  * mulander retracts the initial statement
-21:39 < DuClare> So whenever you have a pointer to a struct athn_usb_softc, it wraps a struct that wraps a struct device at the beginning of it.  So you can cast the pointer if you only care about the device portion.  Or vice versa -- from struct device * to what if_athn_usb.c does
- thanks, I appreciate the correction
- ok I'm already eating away duncaen's time, let's wrap this up at L559 pf_queue_if
- --- DONE ---
+ 565 };
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
