@@ -1,0 +1,301 @@
+20:00 <@mulander> -- poll closed --
+20:00 <@mulander> pf got 40% votes (12 out of 30)
+20:00 <@mulander> ftp coming in second at 27% (8 votes)
+20:00 <@mulander> so pf it is
+20:00 [Users #openbsd-daily]
+20:00 [@brynet        ] [ brianritchie] [ erethon      ] [ kraucrow ] [ phy1729         ] [ stateless     ] 
+20:00 [@fcambus       ] [ bruflu      ] [ erodger      ] [ kysse    ] [ poptart         ] [ tarug0        ] 
+20:00 [@mulander      ] [ bsdtux      ] [ fcbsd        ] [ lpghatguy] [ Putti           ] [ taschenraeuber] 
+20:00 [@qbit          ] [ cengizIO    ] [ filwishe1    ] [ lucias   ] [ quinq           ] [ tdjones       ] 
+20:00 [@t_b           ] [ commandoline] [ fuyuuri      ] [ mandarg  ] [ rabbitear       ] [ Technaton     ] 
+20:00 [ acgissues     ] [ corbyhaas   ] [ geetam       ] [ mattl    ] [ radio2034       ] [ thrym         ] 
+20:00 [ administraitor] [ davl        ] [ ggg`         ] [ metadave ] [ rain1           ] [ timclassic    ] 
+20:00 [ afics         ] [ deei        ] [ ghostyy      ] [ mfgmfg   ] [ rajak           ] [ TuxOtaku      ] 
+20:00 [ akkartik      ] [ Dhole       ] [ gshrikant    ] [ monsieurp] [ S007            ] [ vbarros       ] 
+20:00 [ antranigv     ] [ dlg         ] [ harrellc00per] [ MurphSlaw] [ salv0           ] [ veonik        ] 
+20:00 [ ar            ] [ dostoyesvky ] [ IcePic       ] [ nacci    ] [ schoeby         ] [ versine       ] 
+20:00 [ asie          ] [ Dowzee      ] [ imaginary    ] [ ned      ] [ scottj          ] [ vyvup         ] 
+20:00 [ azend|vps     ] [ dsp         ] [ iomotoko     ] [ Nemo_bis ] [ sdafsd          ] [ whyt          ] 
+20:00 [ bcd           ] [ DuClare     ] [ jbernard     ] [ nmeum    ] [ selckin         ] [ wilornel      ] 
+20:00 [ bch           ] [ duncaen     ] [ jcs          ] [ noexcept_] [ skrzyp          ] [ WubTheCaptain ] 
+20:00 [ benpicco      ] [ ebag        ] [ jnu          ] [ norakam  ] [ smiles`         ] [ xor29ah       ] 
+20:00 [ biniar        ] [ edlm10      ] [ kAworu       ] [ oldlaptop] [ Soft            ] [ zyklon        ] 
+20:00 [ BlackFrog     ] [ electricto4d] [ kittens      ] [ owa      ] [ sshiffle1t      ] 
+20:00 [ brianpc       ] [ entelechy   ] [ kpcyrd       ] [ pepton   ] [ starbucksmacbook] 
+20:00 -!- Irssi: #openbsd-daily: Total of 112 nicks [5 ops, 0 halfops, 0 voices, 107 normal]
+20:01 <@mulander> --- code read: pf ---
+20:03 <@mulander> *** goal: multi day reading of the pf OpenBSD firewall, we will start at pfctl and go deeper by picking a direction doing code reading
+20:03 <@mulander> *** we want to go down to the kernel, not only staying on pfctl side
+20:04 <@mulander> for those new to OpenBSD, pf stands for Packet Filter and was first introduced in OpenBSD 3.0
+20:04 < IcePic> as a replacement for IPF which was pulled when the license was deemed incompatible with BSDL.
+20:05 <@mulander> pf has many features including filtering tcp/ip trafffic, nat handling, normalizing packets, bandwidth shaping, packet priorities and statefull tracking of connections
+20:05 <@mulander> outside of OpenBSD it's well know for a sane, human readable syntax
+20:05 <@mulander> for a quick example
+20:06 <@mulander> here is a set of rules that block brute force attemts on ssh
+20:06 <@mulander> table <children> persist file "/etc/pf.children"
+20:06 <@mulander> block in quick proto tcp from <children> to any
+20:06 <@mulander> pass in on $ext_if proto tcp to any port ssh flags S/SA keep state \
+20:06 <@mulander> (max-src-conn 5, max-src-conn-rate 5/5, overload <children> flush global)
+20:07 <@mulander> this rule set results in blocking anyone trying to connect to the ssh port 5 times in 5 seconds 
+20:07 <@mulander> persist file will load the table with ip addresses stored in /etc/pf.children
+20:07 <@mulander> though this is not a pf tutorial, and we want to jump in to some code
+20:08 <@mulander> handy man pages:
+20:08 <@mulander> http://man.openbsd.org/pfctl.8
+20:08 <@mulander> utility used for controlling the firewall
+20:08 <@mulander> http://man.openbsd.org/pf - describing the pf pseudo device
+20:09 <@mulander> actual filtering happens in the kernel itself, in order for a userland program like pfctl to alter the internal state of the kernel one needs some kind of interface
+20:09 <@mulander> that would allow him to tell the kernel that something needs to change
+20:10 <@mulander> that interface could be a sysctl, syscall or a deice, if you're crazy you could also crete a procfs filesystem to control internal kernel subsystems
+20:10 <@mulander> in case of pf we have a pseudo-device /dev/pf which is controlled from userland via various ioctl's 
+20:10 <@mulander> they all are nicely documented within http://man.openbsd.org/pf
+20:11 <@mulander> we also saw that OpenBSD daemons and utilities follow a similar configuration syntax/layout
+20:11 <@mulander> in our cases we noticed that with doas and httpd
+20:12 <@mulander> pf is no different and allows a sysadmin to specify the firewall rules in /etc/pf.conf
+20:12 <@mulander> this is documented under http://man.openbsd.org/pf.conf.5
+20:12 <@mulander> I already predict it must be parsed using a similar parse.y yacc based parser we saw in doas
+20:12 <@mulander> (note I never myself read the pf code, both userland and kernel - so this is somewhat showing how I tend to explore unkown parts of the code base)
+20:13 <@mulander> let's start with a look on pfctl
+20:15 <@mulander> https://github.com/openbsd/src/tree/master/sbin/pfctl
+20:15 <@mulander> stepping back a bit
+20:15 <@mulander> our /dev/pf is not the only pseudo-device for this subsystem
+20:16 <@mulander> we also have a pflog interface used for storing captured packets for futher inspection
+20:16 <@mulander> documented in http://man.openbsd.org/pflog.4
+20:17 <@mulander> we also have a userland pflogd which reads packets from those interfaces and turns them into regular log files
+20:17 <@mulander> documented under http://man.openbsd.org/pflogd.8
+20:17 <@mulander> ok looking at pfctl itself
+20:18 <@mulander> first thing that I was wondering about
+20:18 <@mulander> who does the parsing of pf.conf
+20:18 <@mulander> it's obviously needed on boot
+20:18 <@mulander> and the sys admin need to reload the configuration
+20:19 <@mulander> is the parsing code somewhere in the kernel or in some userland utilitie
+20:19 <@mulander> we already see parse.y in the linked pfctl folder
+20:19 <@mulander> and a quick grep of /etc reveals that rc indeed calls pfctl to load the rules on boot
+20:19 -!- Irssi: Pasting 5 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+20:19 <@mulander> /etc/rc:        print -- "$RULES" | pfctl -f -
+20:19 <@mulander> /etc/rc:        pfctl -e
+20:19 <@mulander> /etc/rc:                pfctl -f /etc/pf.conf
+20:19 <@mulander> /etc/rc.d/pflogd:       if pfctl -si | grep -q Enabled; then
+20:19 <@mulander> /etc/rc.d/spamlogd:     if pfctl -si | grep -q Enabled; then
+20:20 <@mulander> now we saw how the yacc parser works before
+20:20 <@mulander> pf.conf has a lot more features than doas
+20:21 <@mulander> but I don't think we need to go line by line through the parse.y file (unless we find a need to check some specific syntax constructs)
+20:22 <@mulander> I'm going to refer anyone curios for http://man.openbsd.org/pf.conf.5 which defines the grammaer
+20:22 <@mulander> which is rather simple
+20:22 <@mulander> I will only point out one important caveat
+20:22 <@mulander> For each packet processed by the packet filter, the filter rules are evaluated in sequential order, from first to last. For block and pass, the last matching rule decides what action is taken; if no rule matches the packet, the default action is to pass the packet without creating a state. For match, rules are evaluated every time they match; the pass/block state of a packet remains unchanged.
+20:22 <@mulander> this description is taken from the pf.conf(5) man page
+20:23 <@mulander> so the order of the rules has a collosal impact
+20:24 <@mulander> quick overview of files in pfctl
+20:24 <@mulander> Makefile - standard build script
+20:24 <@mulander> parse.y - rule parsing
+20:27 <@mulander> pf_print_state.c - helper functions for outputing the current connection state for pf synced with another openbsd machine with pfsync
+20:27 <@mulander> ?
+20:27 <@mulander> will mention it here just in case
+20:27 <@mulander> http://man.openbsd.org/pfsync
+20:28 <@mulander> pfctl.8 - the man page
+20:28 <@mulander> pfctl.c - bulk of the utility, main
+20:28 <@mulander> pfctl.h - same as above
+20:29 <@mulander> pfctl_optimize.c - optimizing pf.conf after it's expanded to a full ruleset
+20:29 <@mulander> a single pf rule, can be expanded into multiple pf rulesets
+20:31 <@mulander> especially if we consider that things like macros can be defined in the configuration file itself
+20:32 <@mulander> pfctl_osfp.c - handles the p0f style finger printing
+20:32 <@mulander> p0f is a passive OS detection system created by lcamtuf (Michal Zalewski) it's integrated with OpenBSD's pf
+20:33 < skrzyp> the os fingerprint database was made by lcamtuf (Michal Zalewski) about 15 years ago
+20:33 <@mulander> so one can for example block any windows machine from contacting it's server
+20:33 < skrzyp> woah mulander :D
+20:34 < skrzyp> that database is not 100% accurate though, there are some cases of wrong detection, on Android and newer Windowses mostly
+20:34 <@mulander> pfctl_parser.c - looks like a grouping of helper parsing functions for pfctl itself - possiby to handle user provided addresses etc
+20:35 <@mulander> second looks at pfctl_parser.h - makes me think this part of the code might also parse data from the pseudo devices it controls
+20:36 <@mulander> to present it to the user later
+20:36 <@mulander> pfctl_queue.c - handles bandwidth shaping features
+20:38 <@mulander> pfctl_radix.c and pfctl_table.c - are handling tables in pf
+20:38 <@mulander> we saw a sample of a table in the example I pasted, a children table containing IP address of people we want to block for ssh bruteforcing
+20:38 <@brynet> A momentary interlude, recognizing rain1's nc patch was committed: http://marc.info/?l=openbsd-cvs&m=149711845528658&w=2
+20:39 <@mulander> \o/
+20:39 < IcePic> o7
+20:39 -!- mulander changed the topic of #openbsd-daily to: Read one OpenBSD source file per day | commits: 2 | Channel rules: https://ptpb.pw/cnx1 | Next: 2017.06.10 / duncaen: rebound / mulander: 18:00 UTC
+20:40 < mikeb> bada-boom!
+20:41 <@brynet> mikeb@! ^
+20:41 <@mulander> ok, we got a general overview of what pfctl composes off
+20:42 < rain1> I have a question, is that ok
+20:42 <@mulander> yes, ask :)
+20:42 < rain1> so this pf tool creates a new network device, the pf pseudo device
+20:43 < rain1> is that basically just a container for network packets?
+20:43 <@mulander> not the tool, the kernel exposes a psuedo device
+20:43 <@mulander> pfctl just talks to the device
+20:44 <@mulander> and the kernel internally handles the packets, you can tell it to send them off to a logging interface
+20:44 <@mulander> to capture them and inspect
+20:44 < DuClare> man 4 pf gives an overview of what the pseudo device lets you do
+20:44 <@mulander> by default openbsd has a pflog0 interface
+20:44 <@mulander> so you could tell it to grab all connections to pornhub.com, capture that as a wall_of_shame interface
+20:45 <@mulander> and use tcpdump to grab the image stills of what each user watched to show it live on a projector
+20:45 <@mulander> without having to run tcpdump on all of your traffic.
+20:46 < rain1> i see!
+20:46 <@mulander> so the definition would be in pf.conf, loaded to the kernel using pfctl
+20:47 < DuClare> rain1 controlling the in-kernel packet filter revolves around rules and tables, but you can also manipulate states http://man.openbsd.org/pf.4
+20:47 <@mulander> the kernel would be instructed via the pf pseudo device how to process the rule and to output the packets matching the logging rle to the logging interface
+20:47 <@mulander> ok, resuming
+20:48 <@mulander> pfctl is quite large, possibly the largest code base we read so far
+20:48 <@mulander> and that's just accounting for the control utility itself! (sic)
+20:48 <@mulander> 13k lines of code, out of which 5.3k is the parser
+20:48 <@mulander> the main itself is ~2k lines
+20:50 <@mulander> let's try to do a quick first pass read of pfctl.c
+20:50 <@mulander> obviously if we spot something wrong or have questions along the way - stop and ask
+20:50 <@mulander> standard includes according to style(9)
+20:50 <@mulander> system includes, network includes then remaining includes
+20:51 <@mulander> again a chunk of forward declarations
+20:51 <@brynet> mulander might actually be evil, for the logs.
+20:52 <@mulander> evil or wrong? :)
+20:52 <@mulander> next up we have a chunk of globals for option parsing
+20:52 <@mulander> most notably
+20:52 <@mulander> char *pf_device = "/dev/pf";
+20:52 <@mulander> $ ls -alh /dev/pf                                                                                                                                                                               
+20:52 <@mulander> crw-------  1 root  wheel   73,   0 Jun 10 16:13 /dev/pf
+20:53 <@mulander> there's also an indent macro
+20:53 <@mulander> using the do {} while (0) trick
+20:54 < DuClare> For pretty-printing rules.
+20:54 < rain1> i'd make that a function :P
+20:54 -!- Irssi: Pasting 7 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+20:54 <@mulander> #define INDENT(d, o)    do {                                            \
+20:54 <@mulander>                                 if (o) {                                \
+20:54 <@mulander>                                         int i;                          \
+20:54 <@mulander>                                         for (i=0; i < d; i++)           \
+20:54 <@mulander>                                                 printf("  ");           \
+20:54 <@mulander>                                 }                                       \
+20:54 <@mulander>                         } while (0)                                     \
+20:54 <@mulander> the do { } while(0) makes sure this is only executed once, and behaves the same way regardless where in C it's evoked
+20:56 <@mulander> a uage function for outputting help
+20:56 <@mulander> and we are starting to see pfctl_ functions
+20:56 <@mulander> let's stop on 
+20:56 <@mulander> int
+20:56 <@mulander> pfctl_enable(int dev, int opts)
+20:56 < skrzyp> what the hell is that indent
+20:56 <@mulander> for a second
+20:56 < skrzyp> o.o
+20:57 <@mulander> it's small so I'll paste it here
+20:57 -!- Irssi: Pasting 13 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+20:57 <@mulander> int
+20:57 <@mulander> pfctl_enable(int dev, int opts)
+20:57 <@mulander> {
+20:57 <@mulander> 	if (ioctl(dev, DIOCSTART)) {
+20:57 <@mulander> 		if (errno == EEXIST)
+20:57 <@mulander> 			errx(1, "pf already enabled");
+20:57 <@mulander> 		else
+20:57 <@mulander> 			err(1, "DIOCSTART");
+20:57 <@mulander> 	}
+20:57 <@mulander> 	if ((opts & PF_OPT_QUIET) == 0)
+20:57 <@mulander> 		fprintf(stderr, "pf enabled\n");
+20:57 <@mulander> 	return (0);
+20:58 <@mulander> }
+20:58 <@mulander> ugh, irssi
+20:58 <@mulander> regardless
+20:58 <@mulander> when we started we spoke of pf being controlled by a pseudo-device called /dev/pf
+20:58 <@mulander> that is controlled using various ioctl's
+20:59 <@mulander> we saw an ioctl in use when reading the doas command, where a /dev/tty ioctl handled the `persist` keyword for keeping auth active
+20:59 <@mulander> here we see a ioctl(dev, DIOCSTART)
+20:59 <@mulander> dev in this case is an open pf_device (/dev/pf)
+20:59 <@mulander> dev = open(pf_device, mode);
+20:59 <@mulander> as expected.
+21:00 <@mulander> http://man.openbsd.org/pf#DIOCSTART
+21:00 <@mulander> Start the packet filter.
+21:00 <@mulander> so actually controlling the firewall programatically is not that terrible
+21:01 <@mulander> the only bit I don't see documented nicely is how errno can be set per ioctl call
+21:02 <@mulander> I'm tempted to look how DIOCSTART itself is implemented and where it sets EEXIST
+21:02 <@mulander> and we are going to do that diversion now
+21:02 <@mulander> I search the whole source tree with ag for DIOCSTART
+21:03 <@mulander> first hits are some man pages.
+21:03 <@mulander> one promising thing is sys/net/pf_ioctl.c
+21:03 <@mulander> but I'm letting ag to finish before I bail it out
+21:03 <@mulander> looks like that's it
+21:04 <@mulander> opening up sys/net/pf_ioctl
+21:04 <@mulander> and behold here it is
+21:04 -!- Irssi: Pasting 14 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+21:04 <@mulander>         case DIOCSTART:
+21:04 <@mulander>                 if (pf_status.running)
+21:04 <@mulander>                         error = EEXIST;
+21:04 <@mulander>                 else {
+21:04 <@mulander>                         pf_status.running = 1;
+21:04 <@mulander>                         pf_status.since = time_uptime;
+21:04 <@mulander>                         if (pf_status.stateid == 0) {
+21:04 <@mulander>                                 pf_status.stateid = time_second;
+21:04 <@mulander>                                 pf_status.stateid = pf_status.stateid << 32;
+21:04 <@mulander>                         }
+21:04 <@mulander>                         pf_create_queues();
+21:04 <@mulander>                         DPFPRINTF(LOG_NOTICE, "pf: started");
+21:04 <@mulander>                 }
+21:04 <@mulander>                 break;
+21:05 <@mulander> a quick glance over this switch reveales that there are a few more errors being set
+21:05 < rain1> this (and everything in sys maybe?) is code inside the bsd kernel?
+21:06 <@mulander> it might be worthwhile to ask if we want this documented in pf(4) man page
+21:06 <@mulander> src/sys/net/pf_ioctl.c is inside the kernel
+21:07 < skrzyp> A
+21:07 <@mulander> sys/net/pf_* is around 7.7k lines of code
+21:07 < skrzyp> oops
+21:07 <@mulander> and sys/net/pf* is 18.8k
+21:08 <@mulander> ok going back to userland pfctl
+21:08 <@mulander> we can go quite quickly thorugh the remaining pfctl_* functions
+21:08 <@mulander> disable, clear_stats
+21:08 <@mulander> etc
+21:09 <@mulander> they call ioctls on the device
+21:09 <@mulander> and print back feedback to the user
+21:09 <@mulander> we know where to check whach each one does
+21:09 <@mulander> and where to check why an errno was set
+21:14 <@mulander> I'm slowly scrolling throuhg, trying to find anything that might be out of place
+21:15 <@mulander> but not digging too deep yet, as most are just ioctl call plus some string mangling for output
+21:17 <@mulander> and finally main on line 2208
+21:18 <@mulander> again a bunch of flags for getopt parsing
+21:18 <@mulander> getopt itself
+21:20 <@mulander> then some fine grained command handling
+21:20 <@mulander> for anchors
+21:20 <@mulander> and on line 2400 we actually open the /dev/pf device
+21:20 <@mikeb> a lot of people don't know you can do pctl -a '*' -sr
+21:20 <@mulander> mikeb: interesting, I think that's an explicit example in the man page
+21:21 <@mikeb> fair enough :)
+21:21 <@mulander> To print the main ruleset recursively, specify only '*' as the anchor name:
+21:21 <@mulander> # pfctl -a '*' -sr
+21:21 <@mulander> under pfctl(8) -a
+21:22 <@mulander> line 2416 are display options
+21:23 <@mulander> grabbing various stats and state information
+21:23 <@mulander> in 2482 we list our rules, I assume those are already expanded
+21:23 <@mulander> vs the compacted format of /etc/pf.conf
+21:24 <@mulander> then we have various clear rules
+21:24 <@mulander> to zero out state
+21:24 <@mulander> line 2527 state killers, my fav
+21:24 <@mulander> when adding a spammer to your children tale
+21:24 <@mulander> *table
+21:24 <@mulander> he still can have multiple open connections
+21:24 <@mulander> since pf is stateful
+21:25 <@mulander> adding that IP to the children table will prevent new connections but won't remove existing ones
+21:25 <@mulander> to do that, yone invokes pfctl -k IP
+21:25 <@mulander> which will kill all already established connections from that source
+21:26 <@mulander> we have some more option parsing along the way, and finally a pfctl_state_store and pfctl_state_load
+21:26 < BlackFrog> Which source are you reviewing?  pfctl.c or pf.c?  Because I couldn't find the state killers, your fav
+21:26 <@mulander> pfctl.c
+21:26 < fyuuri> Will the review of rebound still be at 18 UTC?
+21:27 <@mulander> review of rebound depends on duncaen he said he will try to do it after one of my reviews but didn't give a date/time
+21:27 < fyuuri>  ok thank you.
+21:28 < BlackFrog> thanks, but the http://code.metager.de/source/xref/OpenBSD/src/sbin/pfctl/pfctl.c doesn't have line 2527
+21:28 -!- Irssi: Pasting 6 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+21:28 <@mulander> $ doas pfctl -S test.state 
+21:28 <@mulander> $ ls -alh test.state                                                                                                                                                                            
+21:28 <@mulander> -rw-r--r--  1 root  mulander  22.9K Jun 10 21:28 test.state
+21:28 <@mulander> $ file test.state                                                                                                                                                                               
+21:28 <@mulander> test.state: data
+21:28 <@mulander> $ 
+21:28 <@mulander> BlackFrog: uhm, not sure what that site is and how old of a code base it has
+21:29  * mulander looks at header
+21:29 <@mulander> - /*$OpenBSD: pfctl.c,v 1.332 2015/12/10 17:27:00 mmcc Exp $ */
+21:29 <@mulander> my file
+21:29 <@mulander> - /*$OpenBSD: pfctl.c,v 1.344 2017/05/30 12:13:04 henning Exp $ */
+21:29 <@mikeb> BlackFrog: just use https://github.com/openbsd/src/blob/master/sbin/pfctl/pfctl.c
+21:29 <@mulander> that site has outdated code
+21:30 <@mulander> yep, use what mikeb pointed at ^
+21:30 < BlackFrog> thanks for the link
+21:30 < bluewizard> cd ..
+21:30 < DuClare> Or checkout the repo and enjoy the ability to grep all across it :)
+21:30 <@mulander> ok the output I pasted
+21:30 <@mulander> was me checking out how -S dumping state to a file works
+21:30 <@mikeb> or this from soviet union for the cross-reference: http://bxr.su/OpenBSD/sbin/pfctl/pfctl.c
+21:30 <@mulander> it might be fun to investigate what that file is on some future code read
+21:31 <@mulander> this pretty much covers our reading window for today
+21:31 <@mulander> --- DONE ---

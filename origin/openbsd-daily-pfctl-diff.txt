@@ -1,0 +1,332 @@
+20:00 [Users #openbsd-daily]
+20:00 [@akfaew        ] [ brianpc     ] [ erethon      ] [ lk23789k23] [ phy1729  ] [ stateless     ] 
+20:00 [@dlg           ] [ brianritchie] [ fcbsd        ] [ lteo[m]   ] [ pocok    ] [ StylusEater   ] 
+20:00 [@duncaen       ] [ bruflu      ] [ filwishe1    ] [ lucias    ] [ polishdub] [ swankier      ] 
+20:00 [@fcambus       ] [ brynet      ] [ g0relike     ] [ mandarg   ] [ poptart  ] [ tarug0        ] 
+20:00 [@mikeb         ] [ cengizIO    ] [ geetam       ] [ martin__2 ] [ qasa     ] [ taschenraeuber] 
+20:00 [@mulander      ] [ commandoline] [ ggg`         ] [ mattl     ] [ qbit[m]  ] [ tdjones       ] 
+20:00 [@qbit          ] [ corbyhaas   ] [ ghostyy      ] [ metadave  ] [ quinq    ] [ tdmackey      ] 
+20:00 [@t_b           ] [ davl        ] [ ghugha       ] [ mfgmfg    ] [ rabbitear] [ Technaton     ] 
+20:00 [ acgissues     ] [ deei        ] [ harrellc00per] [ monsieurp ] [ rain1    ] [ thrym         ] 
+20:00 [ administraitor] [ Dhole       ] [ Harry        ] [ mpts      ] [ rajak    ] [ timclassic    ] 
+20:00 [ afics         ] [ dostoyesvky ] [ IcePic       ] [ MurphSlaw ] [ rEv9     ] [ turlando      ] 
+20:00 [ akkartik      ] [ Dowzee      ] [ imaginary    ] [ Naabed-   ] [ rnelson  ] [ TuxOtaku      ] 
+20:00 [ albongo       ] [ DrPete      ] [ jaypatelani  ] [ nacci     ] [ S007     ] [ Vaelatern     ] 
+20:00 [ antranigv     ] [ dsp         ] [ jbernard     ] [ nacelle   ] [ samrat   ] [ vbarros       ] 
+20:00 [ ar            ] [ DuClare     ] [ jnu          ] [ nailyk    ] [ selckin  ] [ vyvup         ] 
+20:00 [ asie          ] [ dud_        ] [ jsing`       ] [ ned       ] [ semarie  ] [ whyt          ] 
+20:00 [ azend|vps     ] [ eau         ] [ kAworu       ] [ Niamkik   ] [ SETW     ] [ wilornel      ] 
+20:00 [ babasik122    ] [ ebag        ] [ kittens      ] [ noexcept_ ] [ SETW_    ] [ wodim         ] 
+20:00 [ bcd           ] [ eduardo     ] [ kl3          ] [ norakam   ] [ skizye   ] [ WubTheCaptain ] 
+20:00 [ bch           ] [ electricto4d] [ kpcyrd       ] [ oldlaptop ] [ skrzyp   ] [ xor29ah       ] 
+20:00 [ benpicco      ] [ emigrant    ] [ kraucrow     ] [ owa       ] [ smiles`  ] [ zelest        ] 
+20:00 [ biniar        ] [ entelechy   ] [ kysse        ] [ petrus_lt ] [ Soft     ] [ zyklon        ] 
+20:00 -!- Irssi: #openbsd-daily: Total of 132 nicks [8 ops, 0 halfops, 0 voices, 124 normal]
+20:00 <@mulander> --- code read: pfctl & pf - working on a diff ---
+20:02 <@mulander> *** goal: in the past two days rain1 started hacking on a diff for pfctl, his diff merges two identical diffs
+20:02 <@mulander> and turned functions which return int with their value never used into void
+20:03 <@mulander> this diff has been sent off to tech@ https://marc.info/?t=149719001300001&r=1&w=2
+20:03 <@mulander> after a review mikeb pointed out that pfctl_clear_tables should also undergo a similar conversion
+20:05 <@mulander> in a quick chat it was determined that pfctl_show_tables should be treated in a similar way
+20:05 <@mulander> I'll allow myself to re-paste some valuable pointers we were provided:
+20:06 <@mulander> 13:41 <@mikeb> mulander: pfctl_clear_tables is missing
+20:06 <@mulander> 13:41 <@mikeb> needs to be void as well.
+20:06 < phy1729> semarie: I think I sent a diff a while back removing cpath and wpath unless or if some flag was set, but I don't think anyone found much value in it.
+20:06 <@mulander> 13:49 <@mikeb> that's a tricky one
+20:06 <@mulander> 13:52 <@mulander> that one bubbles up errors from pfctl_table
+20:06 <@mulander> 14:01 <@mikeb> mulander: yeah, but we never check for those
+20:06 <@mulander> 14:01 <@mikeb> i've decided that this should be left for the rainy day
+20:06 -!- Irssi: Pasting 5 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+20:06 <@mulander> 14:06 <@mulander> tackling as in voiding pfctl_clear_tables?
+20:06 <@mulander> 14:07 <@mikeb> mulander: as in adding an appropriate if (pfctl_table() == -1) err(...) in pfctl_clear_tables before making it void :-)
+20:06 <@mulander> 14:08 <@mikeb> so i went back and iirc what bugged me was that they don't give you an upper bound
+20:06 <@mulander> 14:08 <@mikeb> i think MAX_REACHABLE_TIME is our invention
+20:06 <@mulander> 14:08 <@mikeb> (or KAME)
+20:06 <@mulander> 14:08 <@mikeb> so i'd like to know what !KAME (== !BSD) implementation do there
+20:07 <@mulander> ignore last 4 pasted lines, they were not related to the question
+20:07 <@mulander> 14:12 <@mikeb> be careful with return values
+20:07 <@mulander> 14:12 <@mikeb> and ughm, you should test it somehow
+20:07 <@mulander> 14:12 <@mikeb> maybe hardcode an error into the kernel
+20:07 <@mulander> 14:13 <@mikeb> that's DIOCRCLRTABLES you're after
+20:07 <@mulander> 14:13 <@mikeb> to see what kind of output you're getting
+20:08 <@mulander> 14:14 <@mikeb> look at pfr_strerror
+20:08 <@mulander> 14:14 <@mikeb> two useful return values are ESRCH and ENOENT
+20:08 <@mulander> ***
+20:09 <@mulander> The plan is, check the remaining functions from pf_table.c for possible 'void'ing
+20:10 <@mulander> make the change to the ones we select for further modifications
+20:10 <@mulander> and altering our kernel to hardcode the ioctls to return an error
+20:10 <@mulander> in order to see if the error bailouts we add to the voided functions work properly
+20:11 <@mulander> we will start off from the point of rain1s diff being already applied
+20:12 <@mulander> the code in question: http://bxr.su/OpenBSD/sbin/pfctl/
+20:12 <@mulander> current file we are interested in http://bxr.su/OpenBSD/sbin/pfctl/pfctl_table.c
+20:13 <@mulander> to quickly see what functions are declared of type int in pfctl_tabel we can use grep
+20:13 -!- Irssi: Pasting 15 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+20:13 <@mulander> $ grep ^int pfctl_table.c -A1
+20:13 <@mulander> int
+20:13 <@mulander> pfctl_clear_tables(const char *anchor, int opts)
+20:13 <@mulander> int
+20:13 <@mulander> pfctl_show_tables(const char *anchor, int opts)
+20:13 <@mulander> int
+20:13 <@mulander> pfctl_command_tables(int argc, char *argv[], char *tname,
+20:13 <@mulander> int
+20:13 <@mulander> pfctl_table(int argc, char *argv[], char *tname, const char *command,
+20:13 <@mulander> int
+20:13 <@mulander> load_addr(struct pfr_buffer *b, int argc, char *argv[], char *file,
+20:13 <@mulander> int
+20:13 <@mulander> pfctl_define_table(char *name, int flags, int addrs, const char *anchor,
+20:13 <@mulander> int
+20:13 <@mulander> pfctl_show_ifaces(const char *filter, int opts)
+20:15 <@mulander> I will now look at call sites of those functions, to determine if error checking is performed on their return values.
+20:16 <@mulander> 1. http://bxr.su/s?refs=pfctl_clear_tables&project=OpenBSD
+20:16 <@mulander> indeed unchecked
+20:16 <@mulander> 2. http://bxr.su/s?refs=pfctl_show_tables&project=OpenBSD
+20:16 < SETW_> http://bxr.su/s?refs=pfctl_clear_tables&project=OpenBSD
+20:17 < SETW_> Apologies, misclick
+20:17 <@mulander> no worries
+20:17 <@mulander> 2. again, unchecke
+20:17 <@mulander> *unchecked
+20:17 <@mulander> 3. http://bxr.su/s?refs=pfctl_command_tables&project=OpenBSD
+20:18 <@mulander> explicitly checked
+20:18 <@mulander> interestingly it just causes pfctl to exit with a non zero status code
+20:19 <@mulander> I'm noting that down to check what the man page says on pfctl exit codes
+20:20 <@mulander> 4. pfctl_table - http://bxr.su/s?refs=pfctl_table&project=OpenBSD
+20:20 <@mulander> this one does the bulk of the work, andi s the call actually made in the others
+20:21 <@mulander> so we definetely don't want to void this one.
+20:22 <@mulander> 5. http://bxr.su/s?refs=load_addr&project=OpenBSD
+20:22 <@mulander> all calls are checked
+20:22 <@mulander> 6. http://bxr.su/s?refs=pfctl_define_table&project=OpenBSD
+20:23 <@mulander> again all calls chacked
+20:23 <@mulander> including parse.y which on grep/bxr.su might look like not  checked but is actually part of an if a && b conditional
+20:24 <@mulander> 7. http://bxr.su/s?refs=pfctl_show_ifaces&project=OpenBSD
+20:24 <@mulander> we find a third voidable call
+20:25 <@mulander> this one is interesting as it looks like it would print the error and just exit with the ignored 1 value
+20:26 <@mulander> returns with DIOCIGETIFACES, might also change that one to see how this behaves
+20:26 <@mulander> s/returns/is handled with/
+20:28 <@mulander> I'm now opening up the pfctl man page to see what it has to say on return  codes
+20:28 <@mulander> http://man.openbsd.org/pfctl
+20:28 <@mulander> nothing explicitly documented that I can find
+20:31 <@mulander> we will void 1, 2, and 7
+20:32 <@mulander> mikeb mentioned using pfr_strerror(errno)
+20:33 <@mulander> we can see there's already a function defined that  calls it
+20:33 <@mulander> http://bxr.su/OpenBSD/sbin/pfctl/pfctl_table.c#radix_perror
+20:33 <@mulander> it's explicitly used for error reporting in the pfctl_table.c file
+20:35 <@mulander> tempted to check when and why that was implemented
+20:35 <@mulander> https://github.com/openbsd/src/commit/ec359bd517bfb091098376e822c97cd76e87e41c
+20:36 <@mulander> so it was just there from the start when pfctl_show_ifaces first came up
+20:37 <@mulander> this specific code is exeecuted with pfctl -sI
+20:40 <@mulander> listing all tables is done with pfctl -sT
+20:40 <@mulander> and with pfctl -sa (which lists everything)
+20:44 <@mulander> and clearing all tables can be done with pfctl -F Tables
+20:44 <@mulander> ok, so we know what code to change, and how to trigger each to execute
+20:45 <@mulander> let's cook a diff to pfctl first
+20:47 < Niamkik> When you make a diff, are your working on a stable branch or just use current?
+20:47 <@mulander> -current
+20:48 <@mulander> first start by running make after the diff from tech, to make sure the code compiles
+20:48 <@mulander> it does.
+20:48 <@mulander> then open up our pfctl_table.c
+20:48 <@mulander> and locate the 3 functions we want to change
+20:48 <@mulander> L106 clear_tables
+20:49 <@mulander> L111 show tables
+20:49 <@mulander> L597 show ifaces
+20:49 <@mulander> I'm first looking at the last one
+20:50 <@mulander> it already calls radix_perror
+20:51 <@mulander> so outputting the error message to stderr, then continuing
+20:51 <@mulander> and returning 1 that we know the caller ignores
+20:52 <@mulander> radix_perror is called 4 3 times
+20:52 <@mulander> on lines 82, 93 and 610
+20:52 <@mulander> let's check all 3
+20:52 <@mulander> 82 is a macro
+20:52 <@mulander> so is 93
+20:52 <@mulander> RVTEST and CREATE_TABLE
+20:53 <@mulander> all calls to RVTEST are inside pfctl_table
+20:53 <@mulander> which calls the pfctl_radix.c API
+20:54 <@mulander> same for all calls to CREATE_TABLE
+20:54 <@mulander> so radix_perror is limited to that callsite except the standing out show ifaces
+20:55 <@mulander> what we want to do is change the return type of this function to void
+20:55 <@mulander> drop the final return on line 621
+20:55 <@mulander> and change
+20:55 <@mulander> 		if (pfi_get_ifaces(filter, b.pfrb_caddr, &b.pfrb_size)) {
+20:55 <@mulander> 			radix_perror();
+20:55 <@mulander> 			return (1);
+20:55 <@mulander> 		}
+20:55 <@mulander> to directly report the error and terminate execution
+20:57 <@mulander> I'm grepping the tree for usage of pfr_strerror
+20:57 <@mulander> to see if there is any typical way of handling this
+20:58 <@mulander> it's defined in pfctl_radix.c:565
+20:59 <@mulander> a switch over the error number and a call out to strerror except two values that have specific messages overwritten
+21:02 <@mulander> I will use errx, to surpress automatic handling of errno decoding as pfr_strerror already does that
+21:04 <@mulander> next we do the same change for 106 and 111
+21:07 <@mulander> error handling for show ifaces:
+21:07 <@mulander>                 if (pfi_get_ifaces(filter, b.pfrb_caddr, &b.pfrb_size)) {
+21:07 <@mulander>                         errx(1, "pfctl_show_ifaces: %s", pfr_strerror(errno);
+21:07 <@mulander>                 }
+21:08 <@mulander> error handling for clear tables/show tables
+21:08 <@mulander>         if (pfctl_table(0, NULL, NULL, "-F", NULL, anchor, opts) == -1)
+21:08 <@mulander>                 errx(1, "pfctl_clear_tables: %s", pfr_strerror(errno);
+21:09 <@mulander> ^ mising closing brace
+21:11 <@mulander> we also need to fix the prototypes in pfctl.h to be void
+21:13 <@mulander> and now our code compiles
+21:13 <@mulander> which means nothing if it works or not
+21:13 <@mulander> I'll quickly generate a full diff (my changes + rain1 diff) so everyone can follow along
+21:15 <@mulander> https://junk.tintagel.pl/openbsd-daily-pfctl-1.diff
+21:15 <@mulander> let's try the 3 calls we identified that we know trigger the code
+21:15 < Niamkik> "which means nothing if it works or not", are you using some unit testing framework or macro to test your code before made it available upstream?
+21:17 -!- Irssi: Pasting 13 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+21:17 <@mulander> doas ./pfctl -sI
+21:17 <@mulander> lists my interfaces
+21:17 <@mulander> no error
+21:17 <@mulander> doas ./pfctl -sT - lists nothing as I have no tables
+21:18 <@mulander> $ doas ./pfctl -F Tables  
+21:18 <@mulander> 0 tables deleted.
+21:18 <@mulander> $ 
+21:18 <@mulander> $ doas ./pfctl -F Tables  
+21:18 <@mulander> 0 tables deleted.
+21:18 <@mulander> $ 
+21:18 <@mulander> and finally doas ./pfctl -F Tables
+21:18 <@mulander> '0 tables deleted.'
+21:18 <@mulander> as there are none
+21:19 < rain1> there was a mention before of modifying the kernel to return errors, to help debug
+21:19 <@mulander> yes
+21:19 <@mulander> we are at this point
+21:19 <@mulander> as we have a cooked diff but no way to make it go the error path
+21:21 <@mulander> so let's now open up sys/net/pf_ioctl.c
+21:21 <@mulander> we neeed to map each call to a kernel ioctl
+21:21 <@mulander> mikeb was kind enough to tell us that pfctl_clear_tables is DIOCRCLRTABLES
+21:22 <@mulander> we see it handled in line 1860
+21:22 <@mulander> we will add an unconditional error being set
+21:22 <@mulander> after line 1868
+21:23 <@mulander> setting error to ESRCH - table does not exist error
+21:25 <@mulander>    2                 error = pfr_clr_tables(&io->pfrio_table, &io->pfrio_ndel,                                                                                                                                                                                  
+21:25 <@mulander>    1                     io->pfrio_flags | PFR_FLAG_USERIOCTL);                                                                                                                                                                                                 
+21:25 <@mulander> 1869                 error = ESRCH;                                                                                                                                                                                                                             
+21:25 <@mulander>    1                 break;
+21:25 <@mulander> is the modification we make
+21:26 <@mulander> show tables is actually 2 ioctls
+21:26 <@mulander> DIOCRGETTABLES via pfr_get_tables
+21:26 <@mulander> and DIOCRGETTSTATS via pfr_get_tstats
+21:27 <@mulander> tstats is only called when going via verbose 2
+21:27 <@mulander> I think we can just limit ourselves to DIOCRGETTABLES
+21:28 <@mulander> we do the same modification after line 1904
+21:28 <@mulander> adding a hardcoded errno
+21:30 <@mulander> and we have our final one, show interfaces
+21:31 <@mulander> which is DIOCIGETIFACES
+21:31 <@mulander> so we hardcode an error after line 2414
+21:31 <@mulander> let's use ENOENT here
+21:32 <@mulander> 	case ENOENT:
+21:32 <@mulander> 		return "Anchor or Ruleset does not exist";
+21:32 <@mulander> to make sure we get a different message
+21:32 <@mulander> now that's it
+21:32 <@mulander> we are roughly ready to recompile
+21:32 <@mulander> but before doing that I want to disable pf starting up on boot
+21:32 <@mulander> just in case that breaks something
+21:34 <@mulander> I assume pf=NO in /etc/rc.conf.local is all it takes
+21:36 <@mulander> now we are ready to recompile the kernel
+21:36 <@mulander> let's make a backup jut in case of the one we are running
+21:36 <@mulander> $ doas cp /bsd /bsd.b
+21:37 <@mulander> and do the mantra
+21:37 -!- Irssi: Pasting 5 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+21:37 <@mulander>     KK=`sysctl -n kern.osversion | cut -d# -f1`
+21:37 <@mulander>     cd /usr/src/sys/arch/`machine`/compile/$KK
+21:37 <@mulander>     make obj
+21:37 <@mulander>     make config
+21:37 <@mulander>     make
+21:37 <@mulander>     make install
+21:38 <@mulander> https://xkcd.com/303/
+21:39 <@mulander> duncaen: sorry for eating into your time slot, I think we should be done in 5-10 minutes
+21:40 < DuClare> I'm not sure pf=NO actually does it
+21:41 <@mulander> rc.conf declares pf=YES
+21:41 <@mulander> I never had to disable pf :P
+21:41 <@mulander> and never wanted to until today so also not sure
+21:41 < DuClare> /etc/rc # Set initial temporary pf rule set.
+21:42 < DuClare> Oh nevermind
+21:42 < DuClare> Yeah that's conditional.
+21:42 <@mulander> that should be enough, we only altered the ioctls that pfctl calls
+21:42 <@duncaen> mulander: no problem, I only have adding pledge for the rebound monitor process planned
+21:43 <@mulander> ok, kernel compiled
+21:43 <@mulander> fortunately it's a separate box to this laptop
+21:44 <@mulander> let's reboot
+21:45 <@mulander> booted back into X
+21:46 <@mulander> $ doas pfctl -si
+21:46 <@mulander> doas (mulander@fishtank.local) password: 
+21:46 <@mulander> Status: Disabled for 0 days 00:01:21             Debug: err
+21:46 <@mulander> so our way to disable pfctl worked
+21:46 <@mulander> let's enable the firewall
+21:48 <@mulander> $ doas pfctl -f /etc/pf.conf                                                                                                                                                                                                                                   
+21:48 <@mulander> pfctl: pfr_get_tables: No such process
+21:48 <@mulander> so no pf process started
+21:48 <@mulander> wonder if I can start pf without rebooting
+21:48 < Niamkik> pfctl -e?
+21:48 <@mulander> yep
+21:49 <@mulander> ok, let's try our calls
+21:49 <@mulander> on the stock, unmodified pf
+21:49 <@mulander> $ doas pfctl -sI
+21:49 <@mulander> pfctl: Anchor or Ruleset does not exist.
+21:49 <@mulander> $ echo $?
+21:49 <@mulander> 0
+21:50 <@mulander> $ doas pfctl -sT
+21:50 <@mulander> pfctl: Table does not exist.
+21:50 <@mulander> $ 
+21:50 <@mulander> $ doas pfctl -F Tables
+21:50 <@mulander> pfctl: Table does not exist.
+21:50 <@mulander> $ echo $?
+21:50 <@mulander> 0
+21:51 < DuClare> Why 0?
+21:51 <@mulander> doas pfctl -sa
+21:51 <@mulander> $ echo $?                                                                 
+21:51 <@mulander> 0   
+21:51 <@mulander> and printing a bunch of errors on each line ie
+21:51 -!- Irssi: Pasting 6 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+21:51 <@mulander> LIMITS:                                                         
+21:51 <@mulander> states        hard limit    10000                               
+21:51 <@mulander> src-nodes     hard limit    10000                               
+21:51 <@mulander> frags         hard limit    65536                               
+21:51 <@mulander> tables        hard limit     1000                               
+21:51 <@mulander> table-entries hard limit   200000                                
+21:51 <@mulander> pfctl: Table does not exist.  
+21:51 <@mulander> DuClare: it's returning zero because that's the stock /sbin/pfctl
+21:51 < DuClare> Ah
+21:51 <@mulander> now I'm going to redo the tests on the one we modified
+21:52 < DuClare> Right.  Sorry, I wasn't paying attention.
+21:52 <@mulander> no problem, thanks for asking!
+21:52 -!- Irssi: Pasting 5 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+21:52 <@mulander> $ doas ./pfctl -sI
+21:52 <@mulander> pfctl: pfctl_show_ifaces: Anchor or Ruleset does not exist
+21:52 <@mulander> $ echo $?
+21:52 <@mulander> 1
+21:52 <@mulander> $ 
+21:53 -!- Irssi: Pasting 5 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+21:53 <@mulander> $ doas ./pfctl -sT 
+21:53 <@mulander> pfctl: Table does not exist.
+21:53 <@mulander> pfctl: pfctl_show_tables: Table does not exist
+21:53 <@mulander> $ echo $?
+21:53 <@mulander> 1
+21:53 < DuClare> Good.
+21:53 -!- Irssi: Pasting 5 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+21:53 <@mulander> $ doas ./pfctl -F Tables                                                                                                                                                                                                                                       
+21:53 <@mulander> pfctl: Table does not exist.
+21:53 <@mulander> pfctl: pfctl_clear_tables: Table does not exist
+21:53 <@mulander> $ echo $?
+21:53 <@mulander> 1
+21:54 <@mulander> and last one -sa
+21:54 <@mulander> fails when first tryin our modified ioctls
+21:54 -!- Irssi: Pasting 10 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+21:54 <@mulander> LIMITS:
+21:54 <@mulander> states        hard limit    10000
+21:54 <@mulander> src-nodes     hard limit    10000
+21:54 <@mulander> frags         hard limit    65536
+21:54 <@mulander> tables        hard limit     1000
+21:54 <@mulander> table-entries hard limit   200000
+21:54 <@mulander> pfctl: Table does not exist.
+21:54 <@mulander> pfctl: pfctl_show_tables: Table does not exist
+21:54 <@mulander> $ echo $?
+21:54 <@mulander> 1
+21:55 <@mulander> this covers the whole modification, we edited 3 functions: pfctl_clear_tables, pfctl_show_tables and pfctl_show_ifaces
+21:55 <@mulander> to turn them from int returning functions that were not error checked
+21:55 <@mulander> into void returning functions that bail out on errors
+21:55 <@mulander> we modified the kernel to make sure to hit those code paths
+21:55 <@mulander> both on an unmodified pfctl to see how it behaved
+21:56 <@mulander> and on the modified binary to see how our new error handling works
+21:56 <@mulander> I will now wrap this up into a diff for tech
+21:56 <@mulander> thank you all for attending
+21:56 <@mulander> --- DONE ---
+

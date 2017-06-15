@@ -1,0 +1,348 @@
+20:04 -!- mulander changed the topic of #openbsd-daily to: Read one OpenBSD source file per day | commits: 5 | Channel rules: https://ptpb.pw/cnx1 | Next: 2017.06.13 / duncaen: rebound - 19:30 UTC / mulander: smtpd - 18:00 UTC
+20:04 [Users #openbsd-daily]
+20:04 [@akfaew        ] [ brynet      ] [ flopper      ] [ lucias    ] [ qasa            ] [ taschenraeuber] 
+20:04 [@dlg           ] [ cengizIO    ] [ g0relike     ] [ mandarg   ] [ qbit            ] [ tdjones       ] 
+20:04 [@fcambus       ] [ commandoline] [ geetam       ] [ matlock   ] [ quinq           ] [ tdmackey      ] 
+20:04 [@mikeb         ] [ corbyhaas   ] [ ghostyy      ] [ mattl     ] [ rabbitear       ] [ Technaton     ] 
+20:04 [@mulander      ] [ davl        ] [ ghugha       ] [ metadave  ] [ rain1           ] [ thrym         ] 
+20:04 [@t_b           ] [ deei        ] [ Guest35808   ] [ mfgmfg    ] [ re[box]         ] [ timclassic    ] 
+20:04 [ acgissues     ] [ Dhole       ] [ harrellc00per] [ mikeputnam] [ rEv9            ] [ TronDD        ] 
+20:04 [ administraitor] [ dostoyesvky ] [ Harry        ] [ mpts      ] [ rnelson         ] [ TronDD-w      ] 
+20:04 [ afics         ] [ Dowzee      ] [ IcePic       ] [ MurphSlaw ] [ S007            ] [ turlando      ] 
+20:04 [ akkartik      ] [ DrPete      ] [ imaginary    ] [ Naabed-   ] [ samrat          ] [ TuxOtaku      ] 
+20:04 [ antoon_i      ] [ dsp         ] [ jaypatelani  ] [ nacci     ] [ selckin         ] [ Vaelatern     ] 
+20:04 [ antranigv     ] [ DuClare     ] [ jbernard     ] [ nacelle   ] [ semarie         ] [ vbarros       ] 
+20:04 [ ar            ] [ duncaen     ] [ jnu          ] [ nailyk    ] [ SETW            ] [ vyvup         ] 
+20:04 [ asie          ] [ dxtr        ] [ jonbryan     ] [ Niamkik   ] [ SETW_           ] [ whyt          ] 
+20:04 [ azend|vps     ] [ eau         ] [ jsing        ] [ noexcept_ ] [ skizye          ] [ wilornel      ] 
+20:04 [ babasik122    ] [ ebag        ] [ kAworu       ] [ norakam   ] [ skrzyp          ] [ wodim         ] 
+20:04 [ bcd           ] [ edheck      ] [ kittens      ] [ oldlaptop ] [ smiles`         ] [ WubTheCaptain ] 
+20:04 [ bch           ] [ electricto4d] [ kl3          ] [ owa       ] [ Soft            ] [ xor29ah       ] 
+20:04 [ benpicco      ] [ emigrant    ] [ kpcyrd       ] [ petrus_lt ] [ starbucksmacbook] [ zelest        ] 
+20:04 [ biniar        ] [ entelechy   ] [ kraucrow     ] [ phy1729   ] [ stateless       ] [ zyklon        ] 
+20:04 [ brianpc       ] [ erethon     ] [ kysse        ] [ pocok     ] [ StylusEater     ] 
+20:04 [ brianritchie  ] [ fcbsd       ] [ lk23789k23   ] [ polishdub ] [ swankier        ] 
+20:04 [ bruflu        ] [ filwishe1   ] [ lteo[m]      ] [ poptart   ] [ tarug0          ] 
+20:04 -!- Irssi: #openbsd-daily: Total of 135 nicks [6 ops, 0 halfops, 0 voices, 129 normal]
+20:04 <@mulander> --- code read: smtpd/smtpctl ---
+20:05 <@mulander> *** goal: I'm noticing a problem on my mail server that could be a potential fd leak
+20:05 <@mulander> *** it's reported on github as https://github.com/OpenSMTPD/OpenSMTPD/issues/792
+20:05 <@mulander> *** we will read in smtpctl on where that column comes from and why it might be resetting ***
+20:06 <@mulander> Now, I know this bug (if it is a bug) was introdcued between 6.0 and 6.1, as the problem only started appearing after the server upgrade
+20:07 <@mulander> OpenBSD 6.1 shipped with OpenSMTPD 6.0.0
+20:07 <@mulander> the same is stated for 6.0
+20:07 <@mulander> one way to check for this issue would be to diff the two tagged releases and see what changed
+20:08 <@mulander> but instead we will go the other way around, from the perceived problem (thing we notice in `smtpctl monitor`) towards the code that reports that value
+20:08 <@mulander> this will narrow down what we eventually want to compare between releases
+20:08 <@mulander> short rundown o the problem is a not resetting counter for current connections
+20:09 <@mulander> `smtpctl monitor` lists several counters for various values like current clients, connections, disconnections, messages in queue etc
+20:09 <@mulander> the particular value that is not resetting for me is in the client section and labeled 'curr'
+20:09 <@mulander> it stands for currently connected clients
+20:10 <@mulander> if I connect with telnet to my SMTP server, that counter goes up, and remains up until I send QUIT
+20:10 <@mulander> which causes the counter to drop back down by 1
+20:11 <@mulander> let's locate smtpctl
+20:12 <@mulander> http://bxr.su/OpenBSD/usr.sbin/smtpd/
+20:12 <@mulander> and the Makefile for the control program http://bxr.su/OpenBSD/usr.sbin/smtpd/smtpctl/Makefile
+20:13 <@mulander> I'm assuming smtpd/smtpctl.c is the main control program itself
+20:13 <@mulander> http://bxr.su/OpenBSD/usr.sbin/smtpd/smtpctl.c
+20:13 <@mulander> the keyword for the command is `monitor` so that's what I search in the file
+20:13 <@mulander> this leads us towards http://bxr.su/OpenBSD/usr.sbin/smtpd/smtpctl.c#498
+20:14 <@mulander> so let's see what we have here
+20:14 <@mulander> we have 2 digest structres defined
+20:14 <@mulander> they contain the displayed statistics
+20:14 <@mulander> the struct itself is defined in smtpd/smtpd.h#974
+20:15 <@mulander> http://bxr.su/OpenBSD/usr.sbin/smtpd/smtpd.h#974
+20:15 <@mulander> we also have a counter ticking up on each reported line of output
+20:16 <@mulander> that counter is used to output the statistics headers every 25 lines
+20:16 <@mulander> this is how it looks on my server
+20:16 -!- Irssi: Pasting 6 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+20:16 <@mulander>    5    0    1     1    0    0    0       0       0    0      0      0      0                                                                                                                    
+20:16 <@mulander>    5    0    0     1    0    0    0       0       0    0      0      0      0                                                                                                                    
+20:16 <@mulander>                                                                                                                                                                                                  
+20:16 <@mulander> --- client ---  -- envelope --   ---- relay/delivery --- ------- misc -------                                                                                                                    
+20:16 <@mulander> curr conn disc  curr  enq  deq   ok tmpfail prmfail loop expire remove bounce                                                                                                                    
+20:16 <@mulander>    5    0    0     1    0    0    0       0       0    0      0      0      0                                                                                                                    
+20:16 <@mulander>    5    0    0     1    0    0    0       0       0    0      0      0      0    
+20:16 <@mulander> the stats are continously reported and after 25 lines o output the header is repeated
+20:16 <@mulander> the stats reporting runs in a never ending loop
+20:17 <@mulander> we see a srv_send call, which assuming based on the name of that constant uses http://man.openbsd.org/man3/imsg_init.3
+20:17 <@mulander> to communicate with the server who actually knows the stats
+20:18 <@mulander> so sending a request for GET_DIGEST
+20:18 <@mulander> and receiving the digest back
+20:18 <@mulander> then it's read into our digest structure
+20:19 <@mulander> after that we have a boring printf for the header we mentioned and a printf for all the values we received
+20:19 <@mulander> the values outputed have the previously reported values substracted, so we just see the change
+20:20 <@mulander> let's run monitor on my server fresh
+20:20 <@mulander> and see some output
+20:20 <@mulander> $ doas smtpctl monitor
+20:20 <@mulander> --- client ---  -- envelope --   ---- relay/delivery --- ------- misc -------
+20:20 <@mulander> curr conn disc  curr  enq  deq   ok tmpfail prmfail loop expire remove bounce
+20:20 <@mulander>    5 10701 10696     1 5348 5347 5346      17       1    0      0      0      2
+20:20 <@mulander>    5    0    0     1    0    0    0       0       0    0      0      0      0
+20:20 <@mulander>    5    0    0     1    0    0    0       0       0    0      0      0      0
+20:21 <@mulander> now, the first line contains the full stats, as we have no `last` report that would get substracted
+20:21 <@mulander> we can see in line 503
+20:21 <@mulander> that the code especially prepared for that by calling memset to zero out the `last` structure
+20:22 <@mulander> we can also see that there is actually no 'curr' value in our digest structure
+20:22 <@mulander> current is clients connected - clients disconnected
+20:23 <@mulander> and we can see the issue in the initial value of conn and disc
+20:23 <@mulander> 10701 clients connected
+20:23 <@mulander> 10696 clients disconnected
+20:23 <@mulander> so 5 clients are either still connected or unnaccounted for
+20:23 <@mulander> (ie. the code did not detect them disconnecting)
+20:24 <@mulander> or possibly falsly upped the connection
+20:24 <@mulander> we won't get more out of this part of the code, we have to find where ctl_connect and ctl_disconnect is tracked
+20:24 <@mulander> the fastest way should be following the IMSG_CTL_GET_DIGEST
+20:24 <@mulander> as somewher the server has to wait for it in order to prepare the stats
+20:25 <@mulander> http://bxr.su/search?q=IMSG_CTL_GET_DIGEST&defs=&refs=&path=&project=OpenBSD
+20:25 <@mulander> the hit in smtpd.c
+20:25 <@mulander> is in imsg_to_str
+20:26 <@mulander> that's looks like a stdio helper
+20:26 <@mulander> so ignoring that
+20:26 <@mulander> the one in control.c looks like the proper one
+20:27 <@mulander> we have some authentication check, I assume this makes sure our calling proces is elevated
+20:27 <@mulander> (running smtpctl monitor requires root)
+20:29 <@mulander> the digest timestamp is set to current time and the message is composed
+20:29 <@mulander> so at this time digest must have already been pre-populated
+20:29 <@mulander> let's find where
+20:30 <@mulander> I'm searching the code for digest, even though there is a promising looking stat related block right below our current spot
+20:30 < DuClare> There's a file scope struct stat_digest digest in control.c
+20:30 < DuClare> ctl_connect and ctl_disconnect are updated in same file, control_digest_update
+20:30 <@mulander> yep
+20:30 <@mulander> http://bxr.su/OpenBSD/usr.sbin/smtpd/control.c#control_digest_update
+20:30 < DuClare> Via IMSG_STAT_(INCREMENT|DECREMENT)
+20:31 <@mulander> first let's look at control_digest_update
+20:31 <@mulander> how the actual accounting is done
+20:31 <@mulander> we are interested in ctl_connect and ctl_disconnect
+20:32 <@mulander> the key grabbed from the message is smtp.session
+20:32 <@mulander> the digest will be set to p
+20:32 <@mulander> and increased by 1 in line 440
+20:33 <@mulander> address of digest.ctl_connect set to p
+20:33 <@mulander> disconnect however is just upped by the actual value directly here?
+20:34 <@mulander> both are defined as size_t
+20:34 <@mulander> anyone have ideas why ctl_connect is updated via a pointer?
+20:35 <@mulander> I'm looking at git blame
+20:35 <@mulander> to see if that was changed in some way
+20:35 < DuClare> That's funny
+20:36 <@mulander> but that function was not touched in 5 years
+20:36 <@mulander> so it's not likely the cause of this bug unless I never noticed on 6.0
+20:36 <@mulander> still it seems very weird
+20:36 <@mulander> to have that special code for ctl_Connect and not use it for disconnect
+20:37 < DuClare> Hmm
+20:37 < DuClare> Can you send an email somewhere and see if that causes the problematic counter to increase?
+20:37 <@mulander> sure
+20:38 <@mulander> huh the counter is now stuck on 6
+20:38 <@mulander> no
+20:38 <@mulander> it's back down to 5
+20:38 <@mulander> (sorry, this is a live mail server, it does have random connections)
+20:38 <@mulander> so the counter resets back when I'm sending email
+20:38 < DuClare> Okay
+20:40 <@mulander> ok, well apart form the weird difference in disconnect handling I don't see anything wrong that could happen here
+20:41 <@mulander> lets look at the call sites for control_digest_update
+20:41 <@mulander> http://bxr.su/OpenBSD/usr.sbin/smtpd/control.c#153
+20:42 <@mulander> and line 165
+20:42 <@mulander> one increments, second one decrements
+20:42 <@mulander> things are starting to get interesting
+20:42 <@mulander> as wee see something called the stat_backend
+20:43 < DuClare> By the way, I can explain the use of the pointer
+20:43 <@mulander> please do
+20:43  * mulander passes the mic to DuClare 
+20:44 < DuClare> So normally you have a string key and a value, as wellas a flag -- increment or decrement.  From the string we derive the pointer, and then change the value according to the flag & given number
+20:45 < DuClare> But when the key is smtp.session, it controls two different variables.  Normally it follows the same pattern -- translate key to pointer, and increment that
+20:45 < DuClare> But when we want to decrement smtp.session, we actually need to increment clt_disconnect.  So the flag is wrong, just poke the variable directly.
+20:46 < DuClare> You could flip the flag and set the pointer for the same effect
+20:46 < DuClare> I guess someone figured it's more confusing that way.
+20:47  * DuClare drops the mic
+20:47 <@mulander> thanks, makes sense now
+20:47 <@mulander> ok so stat backends
+20:48 <@mulander> there is a stat_backend.c
+20:48 <@mulander> and stat_ramstat.c
+20:48 <@mulander> before we dive into those
+20:48 <@mulander> I'm going to quickly check man for smtpd, smtpd.conf and smtpctl
+20:48 <@mulander> to see if they mention any of it
+20:48 <@mulander> and what's the default
+20:50 <@mulander> no mention
+20:50 <@mulander> guess we can check in control.c
+20:50 <@mulander> if there's one set by default
+20:51 <@mulander> we have a setting in control based on env->sc_stat
+20:52 < Niamkik> I have a question, why increment add 1 (http://bxr.su/OpenBSD/usr.sbin/smtpd/control.c#163) and decrement "add" 0 (http://bxr.su/OpenBSD/usr.sbin/smtpd/control.c#175)?
+20:52 < Niamkik> If I want to "decrement", I would explicitely write -1 or something like, nope?
+20:52 <@mulander> it's because how the value is checked
+20:53 <@mulander> that last field is int incr
+20:53 <@mulander> so it's used like a boolean
+20:53 < Niamkik> ok
+20:53 <@mulander> in C any numeric value not equal to 0 and false is true.
+20:54 <@mulander> so if you would pass -1 it would be interpreted as incr=true
+20:54 <@mulander> hence one branch passes 1 (yes increase the value)
+20:54 <@mulander> and the other 0 (no, don't increase)
+20:55 <@mulander> going back to sc_stat
+20:55 <@mulander> it's set in env on http://bxr.su/OpenBSD/usr.sbin/smtpd/smtpd.c#718
+20:55 <@mulander> going through a stat_backend_lookup
+20:56 <@mulander> http://bxr.su/OpenBSD/usr.sbin/smtpd/stat_backend.c#37
+20:56 <@mulander> apparently it can be either ram or sqlite
+20:56 <@mulander> and this one defaults to ram
+20:56 <@mulander> http://bxr.su/OpenBSD/usr.sbin/smtpd/smtpd.c#139
+20:57 <@mulander> so we know our stats live in memory
+20:57 <@mulander> http://bxr.su/OpenBSD/usr.sbin/smtpd/stat_ramstat.c
+20:58 <@mulander> this stat backend is implemented as a in memory red black tree
+20:58 <@mulander> we saw this api being used before
+20:59 <@mulander> we won't go over it in details but I will check if it was modified recently
+20:59 <@mulander> last modified 2 years ago
+20:59 <@mulander> so unlikely the cause of my issue
+21:00 <@mulander> back to our increment/decrement handlers
+21:00 <@mulander> http://bxr.su/OpenBSD/usr.sbin/smtpd/control.c#163
+21:00 <@mulander> we want to check the IMSG_STAT_INCREMENT and IMSG_STAT_DECREMENT senders
+21:01 <@mulander> looking for calls where the values for smtp.session are passed
+21:01 <@mulander> we could also just grep the tree for smtp.session
+21:01 <@mulander> and that's what I did right no
+21:01 <@mulander> *now
+21:02 -!- Irssi: Pasting 11 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+21:02 <@mulander> control.c
+21:02 <@mulander> 411:    if (!strcmp(key, "smtp.session")) {
+21:02 <@mulander> smtp.c
+21:02 <@mulander> 243:    stat_increment("smtp.session", 1);
+21:02 <@mulander> 244:    stat_increment("smtp.session.local", 1);
+21:02 <@mulander> 292:    stat_increment("smtp.session", 1);
+21:02 <@mulander> 294:            stat_increment("smtp.session.local", 1);
+21:02 <@mulander> 296:            stat_increment("smtp.session.inet4", 1);
+21:02 <@mulander> 298:            stat_increment("smtp.session.inet6", 1);
+21:02 <@mulander> 319:    stat_decrement("smtp.session", 1);
+21:02 <@mulander> we know the calls in control.c
+21:02 <@mulander> let's go there first
+21:02 <@mulander> one thing that's interesting is there's not a matching number of increment for smtp.session compared to decrement..
+21:03 <@mulander> but let's look at the code
+21:03 <@mulander> http://bxr.su/OpenBSD/usr.sbin/smtpd/smtp.c
+21:03 <@mulander> file was last modified 22 days ago
+21:04 < martin__2> When you jump between files, how do you find callers of a functions? Using a tool for that? hope its not a stupid question. But I am used to working in IDEs where there is a keyboard shortcut for that. I use vim here to follow along
+21:04 <@mulander> the site I'm linking to, allows you to click names to jump to definitions
+21:04 < martin__2> Ah got it
+21:04 <@mulander> on openbsd you can grep for ^function
+21:05 <@mulander> or use something like ctags
+21:05 < DuClare> I grep for callers and just use the search in pager usually, unless I'm actually coding
+21:06 <@mulander> ok let's look at places that count things
+21:06 <@mulander> http://bxr.su/OpenBSD/usr.sbin/smtpd/smtp.c#220
+21:06 <@mulander> quick look, we increment smtp.session and smtp.session.local
+21:06 <@mulander> we also increment a sessions counter
+21:06 <@mulander> which is just a size_t global
+21:07 <@mulander> another one in http://bxr.su/OpenBSD/usr.sbin/smtpd/smtp.c#250
+21:08 <@mulander> and a single call to decrement
+21:08 <@mulander> http://bxr.su/OpenBSD/usr.sbin/smtpd/smtp.c#316
+21:09 <@mulander> let's see where smtp_collect is called
+21:09 <@mulander> http://bxr.su/OpenBSD/usr.sbin/smtpd/smtp_session.c#2254
+21:09 <@mulander> in a call to smtp_free
+21:10 <@mulander> wonder if there's a way to see the other counters
+21:10 <@mulander> as if we would have a leak in smtp.smtps and smtp.tls
+21:10 <@mulander> then we would know it's a missing free (if both were off by 5)
+21:11 <@mulander> there is smtpctl show stats
+21:11 <@mulander> let's grab those for a look
+21:11 <@mulander> http://junk.tintagel.pl/smtpctl-stats.txt
+21:12 <@mulander> so we know sessions is at 5
+21:12 <@mulander> tls is at 0
+21:12 <@mulander> I only had inet4 and local connections
+21:13 <@mulander> so at least 5 times smtp_collect was not called
+21:14 <@mulander> and the connection was probably not a tls session?
+21:14 <@mulander> ie. some nmap scan?
+21:15 <@mulander> did a scan just to check but it didn't result in a non reducing connection
+21:16 <@mulander> ok, let's look where smtp_free is called
+21:16 <@mulander> as we know that's the only place that results in this counter being dropped
+21:16 <@mulander> (unless the issue is in double accounting for the connection)
+21:17 < Niamkik> Are you always debugging without tools (like valgrind/gdb) for memory leaks?
+21:17 <@mulander> how would you run that? if in 12 days this only leaked 5 values
+21:17 <@mulander> on a live email server
+21:17 < Niamkik> right.
+21:17 <@mulander> out of 5369 delivered emails
+21:20 <@mulander> ok, I'm thining how to move forward
+21:21 <@mulander> worth also to keep smtp_enqueue in mind
+21:21 <@mulander> and smtp_accept
+21:21 <@mulander> in worst case scenario (or if someone wants to do that now) we could diff 6.0 to 6.1
+21:22 <@mulander> and see if any change resulted in smtp_accept, smtp_enqueue or smtp_free being changed
+21:24 <@mulander> also if anyone is wondering there is no active connection as I did check that with netstat as on the github ticket
+21:25 <@mulander> we still have 8 minutes left, think a little too much to go either way (checking uses of calls that increase/decress smtp.sessions)
+21:25 < swankier> I wonder if your firewall configuration could be having an impact on this.
+21:25 <@mulander> what would that impact?
+21:26 <@mulander> there are a few avenues that we can continue one
+21:26 <@mulander> a) try one of the debugging facilities built into smtpctl
+21:27 <@mulander> b) manually check calls to free/increase the counters
+21:27 <@mulander> c) diff 6.0 to 6.1 checking for changes that touched any functions that could bump counters (we know all of them by now)
+21:27 <@mulander> I'll make a poll for tomorrow (and will also think on the problem myself)
+21:28 < martin__2> a manual telnet session to smtpd that is aborted. Could that trigger this?
+21:28 <@mulander> let's try (I tried with QUIT)
+21:28 <@mulander> will just kill -9 telnet
+21:28 < swankier> firewalls blocking traffic could leave a connection in a 'weird' state.  For example, I have seen issues with programs like fail2ban.
+21:29 < IcePic> pfctl -k to kill a state, perhaps
+21:29 <@mulander> IcePic: great idea
+21:29 <@mulander> anyone willing to connect so I can pfctl kill him by ip?
+21:29 <@mulander> as doing that on my own will drop me off IRC here :)
+21:29 <@mulander> telnet tintagel.pl 25
+21:30 <@mulander> and let me know your IP
+21:30 < swankier> also, does the counter do the 'right thing' for timeouts as opposed to quits (or potentially other exit states that exist?)
+21:30 < Niamkik> mulander: 91.160.98.84
+21:30 <@mulander> waiting for the counter to settle
+21:30 <@mulander> we currently have 7 connections
+21:30 <@mulander> our baseline was 5
+21:30 <@mulander> I'm going to kill off Niamkik with pfctl -k
+21:31 <@mulander> $ doas pfctl -k 91.160.98.84
+21:31 <@mulander> killed 1 states from 1 sources and 0 destinations
+21:31 <@mulander> the counter is at 7
+21:31 <@mulander> folks, you're amazing
+21:31 <@mulander> counter on 6
+21:31 <@mikeb> I quit
+21:31 <@mulander> so baseline is increased by one
+21:31 <@mulander> great
+21:32 <@mulander> ok, now why would that trigger on my box?
+21:32 <@mulander> I always watch smtpctl monitor
+21:32 <@mulander> and often see spammers
+21:32 <@mulander> which is just a bunch of sudden connections, sometimes up to 30
+21:32 <@mulander> my process for handling those is
+21:32 <@mulander> pfctl -t children -T add
+21:32 <@mulander> pfctl -k
+21:33 <@mulander> last time I did that was June 6th
+21:33 < DuClare> Timeout is 300 seconds
+21:33 <@mulander> as that's when I last modified my /etc/pf.children
+21:33 < DuClare> Will it drop back to 5 in a few minutes
+21:33 <@mulander> DuClare: it must have on 6.0
+21:34 <@mulander> because I do that a lot and did on 6.0 for months
+21:34 <@mulander> it won't drop now 100% sure of it.
+21:34 < DuClare> Well, let's wait for it
+21:34 <@mulander> sure
+21:34 <@mulander> so 19:31 UTC killed the state
+21:35 < swankier> so we wait until 19: 37 UTC
+21:35 <@mulander> btw, if someone would like to try this on 6.0 that would be great
+21:35 <@mulander> spin up an openbsd box with basic smtpd conf and telnet into it
+21:35 <@mulander> try pfctl -k your ip
+21:35 <@mulander> and see if the counter drops
+21:35 <@mulander> repeat for 6.1
+21:36 <@mulander> huh
+21:36 <@mulander> counter dropped back to 5
+21:36 <@mulander> :(
+21:36 <@mulander> DuClare: so the timeout worked
+21:37 < swankier> how does the timeout work?  could there be a corner case it misses?
+21:37 < DuClare> I'm trying to figure out.  Event-driven programs and their callback hell :D
+21:38 < swankier> also, could there be anti-spam rules that end a connection in a way that the counters do not get updated
+21:40 < martin__2> Can we code some debug output somewhere that can tell us anything.
+21:40 <@mulander> martin__2: most of the debug is built in
+21:40 <@mulander> martin__2: also the big problem is, we don't kno how to reproduce the bug
+21:41 < DuClare> Yeah.  That'd make it much easier to nail down..
+21:42 < swankier> also, does sending signals to the smtpd process alter stats counter collection at all?  like a HUP?
+21:43 <@mulander> there is smtpctl trace
+21:43 <@mulander> for each subsystem - includin stats
+21:43 <@mulander> problem is, we know the current state is bad (off by 5)
+21:43 <@mulander> but we don't know how to cause the bug
+21:45 <@mulander> ok I'm again into duncaens time
+21:45 < martin__2> can we continue this another time?
+21:45 <@mulander> of course
+21:46 <@mulander> tomorrow at 18:00 UTC
+21:46 <@mulander> I do want to get to the root of this
+21:46 < martin__2> I really want us to squash that bug.
+21:46 <@mulander> same!
+21:46 <@mulander> small poll from initial ideas for tomorrow
+21:46 <@mulander> https://www.strawpoll.me/13181697
+21:46 <@mulander> I am also very open to feedback if you have other ideas
+21:47 <@mulander> if someone manages to reproduce this problem on their own machines then I'm also all ears for that
+21:47 <@mulander> I do know of at least one person seeing the same issue
+21:47 < martin__2> if i have time. I can try to trigger this bug myself until next time
+21:47 <@mulander> from the opensmtpd channel here on IRC
+21:47 <@mulander> that info is logged in the github ticket
+21:48 <@mulander> thank you all for participating! it's a blast to have so much help with this!
+21:48 <@mulander> see you tomorrow
+21:48 <@mulander> --- DONE ---

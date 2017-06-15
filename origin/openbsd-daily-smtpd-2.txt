@@ -1,0 +1,429 @@
+19:58 [Users #openbsd-daily]
+19:58 [@akfaew        ] [ brynet      ] [ filwishe1    ] [ lucias    ] [ qbit          ] [ tdjones      ] 
+19:58 [@dlg           ] [ cengizIO    ] [ g0relike     ] [ luisbg    ] [ qbit[m]       ] [ tdmackey     ] 
+19:58 [@fcambus       ] [ commandoline] [ geetam       ] [ mandarg   ] [ quinq         ] [ Technaton    ] 
+19:58 [@mikeb         ] [ corbyhaas   ] [ ghostyy      ] [ mattl     ] [ rabbitear     ] [ thrym        ] 
+19:58 [@mulander      ] [ davl        ] [ ghugha       ] [ metadave  ] [ rain1         ] [ timclassic   ] 
+19:58 [@t_b           ] [ deei        ] [ harrellc00per] [ mikeputnam] [ rajak         ] [ TronDD       ] 
+19:58 [ acgissues     ] [ Dhole       ] [ Harry        ] [ mpts      ] [ re[box]       ] [ TronDD-w     ] 
+19:58 [ administraitor] [ dostoyesvky ] [ IcePic       ] [ MurphSlaw ] [ rEv9          ] [ turlando     ] 
+19:58 [ afics         ] [ Dowzee      ] [ imaginary    ] [ Naabed-   ] [ rnelson       ] [ TuxOtaku     ] 
+19:58 [ akkartik      ] [ DrPete      ] [ jbernard     ] [ nacci     ] [ S007          ] [ Vaelatern    ] 
+19:58 [ antoon_i      ] [ dsp         ] [ jnu          ] [ nacelle   ] [ selckin       ] [ vbarros      ] 
+19:58 [ antranigv     ] [ DuClare     ] [ jonbryan     ] [ nailyk    ] [ SETW          ] [ venam        ] 
+19:58 [ ar            ] [ duncaen     ] [ jsing        ] [ Niamkik   ] [ SETW_         ] [ vyvup        ] 
+19:58 [ asie          ] [ dxtr        ] [ kAworu       ] [ noexcept_ ] [ skizye        ] [ whyt         ] 
+19:58 [ azend|vps     ] [ eau         ] [ kittens      ] [ norakam   ] [ skrzyp        ] [ wilornel     ] 
+19:58 [ bcd           ] [ ebag        ] [ kl3          ] [ oldlaptop ] [ smiles`       ] [ wodim        ] 
+19:58 [ bch           ] [ electricto4d] [ kpcyrd       ] [ owa       ] [ Soft          ] [ WubTheCaptain] 
+19:58 [ benpicco      ] [ emigrant    ] [ kraucrow     ] [ petrus_lt ] [ stateless     ] [ xor29ah      ] 
+19:58 [ biniar        ] [ entelechy   ] [ kysse        ] [ phy1729   ] [ StylusEater   ] [ zelest       ] 
+19:58 [ brianpc       ] [ erethon     ] [ landers2     ] [ polishdub ] [ swankier      ] [ zyklon       ] 
+19:58 [ brianritchie  ] [ eyl         ] [ lk23789k23   ] [ poptart   ] [ tarug0        ] 
+19:58 [ bruflu        ] [ fcbsd       ] [ lteo[m]      ] [ qasa      ] [ taschenraeuber] 
+19:58 -!- Irssi: #openbsd-daily: Total of 130 nicks [6 ops, 0 halfops, 0 voices, 124 normal]
+19:58 <@mulander> people around? :)
+19:58 < DuClare> <- not people but here
+20:00  * duncaen is here too
+20:00 <@mulander> ok, starting then :)
+20:00 <@mulander> --- code read: smtpd/smtpctl bug hunting ---
+20:00 <@mulander> we left off yesterday with a poll
+20:00 <@mulander> http://www.strawpoll.me/13181697/r
+20:01 <@mulander> it resulted in a draw, but we have one new bit of information
+20:01 <@mulander> I had a chat on the opensmtpd channel, and we diagnosed that the connections are indeed left open between smtpd and clamav
+20:01 <@mulander> clamav is used on my host for av scanning incoming & outgoing email
+20:02 <@mulander> the relevant part of my config
+20:02 <@mulander> accept tagged CLAM_IN for domain <vdomains> virtual <vusers> deliver to lmtp "/var/dovecot/lmtp"
+20:02 <@mulander> listen on lo0 port 10026 tag CLAM_IN  # incoming mail
+20:03 <@mulander> fstat shows exactly 5 connections open
+20:03 -!- Irssi: Pasting 5 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+20:03 <@mulander> _smtpd   smtpd      63585   25* internet stream tcp 0x0 127.0.0.1:10026 <-- 127.0.0.1:16619
+20:03 <@mulander> _smtpd   smtpd      63585   26* internet stream tcp 0x0 127.0.0.1:10026 <-- 127.0.0.1:44666
+20:03 <@mulander> _smtpd   smtpd      63585   27* internet stream tcp 0x0 127.0.0.1:10026 <-- 127.0.0.1:13400
+20:03 <@mulander> _smtpd   smtpd      63585   28* internet stream tcp 0x0 127.0.0.1:10026 <-- 127.0.0.1:24442
+20:03 <@mulander> _smtpd   smtpd      63585   29* internet stream tcp 0x0 127.0.0.1:10026 <-- 127.0.0.1:12347
+20:03 < DuClare> Speaking of that, gilles left with a puzzling note I didn't pay enough to attention back then
+20:03 <@mulander> and that matches our smtp.sessions counter
+20:04 < DuClare> 01:18 < __gilles[away]> mh, unsure but all sessions should terminate through smtp_free() so if you slap a log_debug() in there and don't see a
+20:04 < DuClare>                         matching smtp_free() for every established smtp session _when you no longer have pending links in fstat_ then there's a bug in
+20:04 < DuClare>                         the state machine
+20:06 < DuClare> In the emphasized part, is he saying that these sessions shouldn't timeout as long as we find these streams in fstat output?  That can't be right, can it?
+20:07 <@mulander> it does read like that
+20:07 <@mulander> but previously he said that smtpd should notice clamav droppin the mail
+20:07 <@mulander> so I think the root cause is not realising the connection is essentially toast?
+20:07 < DuClare> That is my understanding of the situation
+20:11 <@mulander> well, we have to start somewhere
+20:11 <@mulander> think reproducing this is our best bet at this point
+20:12 <@mulander> the idea is to cause clamav to overload while parsing incoing mail
+20:12 <@mulander> this can mean sending large email or multiple emails at the same time
+20:12 <@mulander> I'm creating a bunch of files I will email to myself
+20:13 <@mulander> dd if=/dev/urandom of=16m.txt bs=16M count=1
+20:13 <@mulander> 1, 2, 4, 8 and 16M.
+20:13 <@mulander> I will then base 64 encode them
+20:14 <@mulander> base64 1m.txt > 1m.base64
+20:14 <@mulander> this will bloat up the size a bit but we don't care on that level
+20:14 < duncaen> could you let smtpd connect to nc instead and just ^C the session?
+20:15 <@mulander> duncaen: I was going to use `mail` locally from the server
+20:15 <@mulander> and just catting the file there
+20:15 < duncaen> i mean instead of navk clamav
+20:15 <@mulander> ah
+20:15 < duncaen> *having to find the case where clamav would break
+20:15 <@mulander> well, the problem is, this is my live email server:P
+20:15 < DuClare> By the way
+20:16 <@mulander> also reloading the config will cause our counters to reset
+20:16 < DuClare> fstat has flag -s, it could be interesting to see the transfer stats for those hanging connections
+20:16 <@mulander> DuClare: checking
+20:16 < DuClare> Also see if these stats change at all when mail passes through
+20:16 -!- Irssi: Pasting 5 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+20:16 <@mulander> _smtpd   smtpd      63585   25* internet stream tcp 0x0 127.0.0.1:10026 <-- 127.0.0.1:16619            0        0
+20:16 <@mulander> _smtpd   smtpd      63585   26* internet stream tcp 0x0 127.0.0.1:10026 <-- 127.0.0.1:44666            0        0
+20:16 <@mulander> _smtpd   smtpd      63585   27* internet stream tcp 0x0 127.0.0.1:10026 <-- 127.0.0.1:13400            0        0
+20:16 <@mulander> _smtpd   smtpd      63585   28* internet stream tcp 0x0 127.0.0.1:10026 <-- 127.0.0.1:24442            0        0
+20:16 <@mulander> _smtpd   smtpd      63585   29* internet stream tcp 0x0 127.0.0.1:10026 <-- 127.0.0.1:12347            0        0
+20:16 < DuClare> Interesting
+20:17 < DuClare> Did you run that as root?
+20:17 <@mulander> no, as the user, re-running
+20:17 -!- Irssi: Pasting 5 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+20:17 <@mulander> _smtpd   smtpd      63585   25* internet stream tcp 0xffff80000041f220 127.0.0.1:10026 <-- 127.0.0.1:16619           650      185
+20:17 <@mulander> _smtpd   smtpd      63585   26* internet stream tcp 0xffff8000003d3c98 127.0.0.1:10026 <-- 127.0.0.1:44666           162       88
+20:17 <@mulander> _smtpd   smtpd      63585   27* internet stream tcp 0xffff80000038eb00 127.0.0.1:10026 <-- 127.0.0.1:13400           393      105
+20:17 <@mulander> _smtpd   smtpd      63585   28* internet stream tcp 0xffff80000041e500 127.0.0.1:10026 <-- 127.0.0.1:24442          1134      171
+20:17 <@mulander> _smtpd   smtpd      63585   29* internet stream tcp 0xffff800000478d20 127.0.0.1:10026 <-- 127.0.0.1:12347           722      111
+20:17 < DuClare> Okay
+20:17 <@mulander> I'm going to send mysel a 1 mb email now
+20:17 <@mulander> to see if the stats change
+20:18 <@mulander> cat 1m.base64 | mail -s 1m mulander@tintagel.pl
+20:18 <@mulander> connections back to 5
+20:18 <@mulander> fstat as root
+20:18 -!- Irssi: Pasting 5 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+20:18 <@mulander> _smtpd   smtpd      63585   25* internet stream tcp 0xffff80000041f220 127.0.0.1:10026 <-- 127.0.0.1:16619           650      185
+20:18 <@mulander> _smtpd   smtpd      63585   26* internet stream tcp 0xffff8000003d3c98 127.0.0.1:10026 <-- 127.0.0.1:44666           162       88
+20:18 <@mulander> _smtpd   smtpd      63585   27* internet stream tcp 0xffff80000038eb00 127.0.0.1:10026 <-- 127.0.0.1:13400           393      105
+20:18 <@mulander> _smtpd   smtpd      63585   28* internet stream tcp 0xffff80000041e500 127.0.0.1:10026 <-- 127.0.0.1:24442          1134      171
+20:18 <@mulander> _smtpd   smtpd      63585   29* internet stream tcp 0xffff800000478d20 127.0.0.1:10026 <-- 127.0.0.1:12347           722      111
+20:19 <@mulander> no change
+20:19 < DuClare> Right
+20:19 <@mulander> so those are not some re-used pipes
+20:19 < DuClare> Right.
+20:19 <@mulander> ok, will try the other sizes, to see if we can trigger this with a single email
+20:20 < duncaen> resend your inbox :D
+20:21 <@mulander> I'm watching top as the email is going
+20:21 <@mulander> tryin the 4MB one
+20:23 <@mulander> still nothing, trying the 8 megs one
+20:23 <@mulander> still ok
+20:24 <@mulander> 16 megs
+20:25 <@mulander> clamd is chugging cpu at quarter capacity
+20:26 <@mulander> and it passed through without issue.
+20:26 -!- martin__ is now known as martin__2
+20:27 <@mulander> I will now try sending 10 emails at once of the 16 meg one.
+20:29 <@mulander> I am under significant load now on the server
+20:29 <@mulander> curr counter shows 15 curr connections
+20:29 <@mulander> all trying to deliver a 15 mb mail
+20:29 <@mulander> *>16
+20:31 <@mulander> counter down to 14
+20:31 <@mulander> still processing
+20:31 <@mulander> 10
+20:31 <@mulander> 8
+20:31 <@mulander> 7
+20:32 <@mulander> my queue still shows emails in flight
+20:33 < martin__2> Sorry for showing up late. Is the baseline still 5?
+20:33 <@mulander> yes
+20:33 <@mulander> the baseline is still 5 connections
+20:33 <@mulander> we are currently up at 8, but clamav is still scanning
+20:33 <@mulander> and there are 11 envelopes in flight
+20:36 <@mulander> we might be on to something
+20:36 <@mulander> 13 in flight
+20:36 <@mulander> 9 curr connections
+20:36 <@mulander> clamd still scanning
+20:36 <@mulander> I see first 2 emails in my inbox
+20:37 < swankier> I wonder if there are any error logs related to clamav that might explain a crash?
+20:37 < swankier> or other unexpected behaviour
+20:38 <@mulander> swankier: perhaps, we will check for that if we reproduce - still smtpd should see the connection dead
+20:40 < swankier> I mean, as a method to identify a test case from your production traffic
+20:41 <@mulander> 5 emails delivered
+20:41 <@mulander> 6
+20:42 <@mulander> here is one interesting entry
+20:42 <@mulander> 31434d9a5e82e101|local|mta|auth|mulander@tintagel.pl|mulander@tintagel.pl|mulander@tintagel.pl|1497464964|1497810564|0|1|pending|844|Connection closed unexpectedly
+20:42 <@mulander> I found that looking at smtpctl show queue
+20:42 <@mulander> there are still 7 envelopes in flight
+20:42 < martin__2> that looks interesting
+20:43 <@mulander> I wonder if we will see leaks for local connections
+20:43 <@mulander> as smtp accounts them differently
+20:43 <@mulander> (additional counter for local)
+20:44 <@mulander> oh it's just a growing counter
+20:44 <@mulander> 7 emails delivered
+20:44 <@mulander> 4 still in flight
+20:44 <@mulander> out of which 1 is unrelated to our test
+20:44 <@mulander> 31434d9a5e82e101|local|mta|auth|mulander@tintagel.pl|mulander@tintagel.pl|mulander@tintagel.pl|1497464964|1497810564|0|1|pending|705|Connection closed unexpectedly
+20:44 <@mulander> 4ba569ac364a2483|local|mta|auth|mulander@tintagel.pl|mulander@tintagel.pl|mulander@tintagel.pl|1497464965|1497810565|1497465111|0|inflight|748|
+20:44 <@mulander> 9efdf4134b6c305c|local|mta|auth|mulander@tintagel.pl|mulander@tintagel.pl|mulander@tintagel.pl|1497464966|1497810566|1497465112|0|inflight|747|
+20:44 <@mulander> curr counter is at 8
+20:44 <@mulander> if we get left with 1 increase in 'curr'
+20:45 <@mulander> then we can assume that the errored out envelope might be related
+20:46 <@mulander> ok
+20:46 <@mulander> $ doas smtpctl show queue 
+20:46 <@mulander> 31434d9a5e82e101|local|mta|auth|mulander@tintagel.pl|mulander@tintagel.pl|mulander@tintagel.pl|1497464964|1497810564|0|1|pending|596|Connection closed unexpectedly
+20:46 <@mulander> 4ba569ac364a2483|local|mta|auth|mulander@tintagel.pl|mulander@tintagel.pl|mulander@tintagel.pl|1497464965|1497810565|0|1|pending|597|Connection closed unexpectedly
+20:46 <@mulander> 9efdf4134b6c305c|local|mta|auth|mulander@tintagel.pl|mulander@tintagel.pl|mulander@tintagel.pl|1497464966|1497810566|0|1|pending|598|Connection closed unexpectedly
+20:46 <@mulander> think we have it.
+20:46 <@mulander> there are still 4 envelopes
+20:46 <@mulander> the currenct connection counter is up to 8
+20:46 <@mulander> and not going down
+20:46 <@mulander> I assume the envelopes just get expunged after retrying N times
+20:48 <@mulander> 7 emails in my inbox from this test, 3 missing.
+20:48 < martin__2> The question is why is the connection closed unexpectedly
+20:48 <@mulander> 3 envelopes ended up with 'Connections closed unexpectedly'
+20:48 <@mulander> and our curr counter is permanently up by 3
+20:48 <@mulander> martin__2: what we were suggested on #opensmtpd is that clamav just drops them when it can't handle the load
+20:49 <@mulander> we see that smtpd accounts for that in the envelope queue
+20:49 <@mulander> thing is, envelopes have a retry timer on them
+20:49 <@mulander> 31434d9a5e82e101|local|mta|auth|mulander@tintagel.pl|mulander@tintagel.pl|mulander@tintagel.pl|1497464964|1497810564|0|1|pending|409|Connection closed unexpectedly
+20:49 <@mulander> 4ba569ac364a2483|local|mta|auth|mulander@tintagel.pl|mulander@tintagel.pl|mulander@tintagel.pl|1497464965|1497810565|0|1|pending|410|Connection closed unexpectedly
+20:49 <@mulander> 9efdf4134b6c305c|local|mta|auth|mulander@tintagel.pl|mulander@tintagel.pl|mulander@tintagel.pl|1497464966|1497810566|0|1|pending|411|Connection closed unexpectedly
+20:49 <@mulander> you can see the prev to last column going down in values
+20:50 <@mulander> so in about 6 minutes time it should retry
+20:50 <@mulander> not sure if it retries over the same connection, or a new one
+20:50 < DuClare> The connection closed.
+20:50 <@mulander> from fstat
+20:50 -!- Irssi: Pasting 8 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+20:50 <@mulander> _smtpd   smtpd      63585   24* internet stream tcp 0xffff800000445410 127.0.0.1:10026 <-- 127.0.0.1:43556         27431    22454
+20:50 <@mulander> _smtpd   smtpd      63585   25* internet stream tcp 0xffff80000041f220 127.0.0.1:10026 <-- 127.0.0.1:16619           650      185
+20:50 <@mulander> _smtpd   smtpd      63585   26* internet stream tcp 0xffff8000003d3c98 127.0.0.1:10026 <-- 127.0.0.1:44666           162       88
+20:50 <@mulander> _smtpd   smtpd      63585   27* internet stream tcp 0xffff80000038eb00 127.0.0.1:10026 <-- 127.0.0.1:13400           393      105
+20:50 <@mulander> _smtpd   smtpd      63585   28* internet stream tcp 0xffff80000041e500 127.0.0.1:10026 <-- 127.0.0.1:24442          1134      171
+20:50 <@mulander> _smtpd   smtpd      63585   29* internet stream tcp 0xffff800000478d20 127.0.0.1:10026 <-- 127.0.0.1:12347           722      111
+20:50 <@mulander> _smtpd   smtpd      63585   33* internet stream tcp 0xffff80000045f440 127.0.0.1:10026 <-- 127.0.0.1:1404          53409    44905
+20:50 <@mulander> _smtpd   smtpd      63585   36* internet stream tcp 0xffff800000488260 127.0.0.1:10026 <-- 127.0.0.1:49134         35197    44905
+20:50 <@mulander> DuClare: i it's closed, then what is fstat showing us?
+20:51 <@mulander> that smtpd still holds the fd?
+20:51 < DuClare> Umm
+20:51 < DuClare> The pending envelopes are going TO clamav, right?
+20:52 < DuClare> And the connections you see in fstat are the messages returning to smtpd from clamav
+20:52 <@mulander> yes
+20:53 < DuClare> So the connections from smtpd to clam died.  Connections from clam to smtpd are still alive, and stuck
+20:53 <@mulander> or wait, the <-- shows the flow direction right
+20:53 < DuClare> Yes
+20:54 <@mulander> listen on lo0 port 10026 tag CLAM_IN  # incoming mail
+20:54 <@mulander> listen on lo0 port 10028 tag CLAM_OUT # outgoing mail
+20:54 <@mulander> 10026 is where smtpd drops incoming mail
+20:54 <@mulander> 10028 is where it's picked up
+20:54 < DuClare> Oh
+20:54 < DuClare> Ehm
+20:55 <@mulander> retry in 1 minute
+20:55 <@mulander> I want to see what happens to the envelopes
+20:55 < martin__2> would not the connection be timed out like every other connection?
+20:55 <@mulander> if they get delivered to my inbox and the counter stays up I think we have the bug
+20:55 < DuClare> What do you mean by "drops"
+20:56 < DuClare> Oh, you're scanning both incoming and outgoing mail?
+20:57 < DuClare> Right.
+20:58 <@mulander> yep
+20:58 <@mulander> ok messages are again inflight
+20:58 <@mulander> 6f48878435a06735|inet4|mda||mulander@tintagel.pl|mulander@tintagel.pl|mulander@tintagel.pl|1497466567|1497812167|1497466685|0|inflight|7|
+20:58 <@mulander> 9efdf4134b6c305c|local|mta|auth|mulander@tintagel.pl|mulander@tintagel.pl|mulander@tintagel.pl|1497464966|1497810566|1497466566|1|inflight|126|Connection closed unexpectedly
+20:58 <@mulander> dfac30c8912a8099|inet4|mda||mulander@tintagel.pl|mulander@tintagel.pl|mulander@tintagel.pl|1497466572|1497812172|1497466669|0|inflight|23|
+20:58 <@mulander> I received more mails to my inbox
+20:58 <@mulander> I have 9 emails now in inbox
+20:58 <@mulander> there's only a single entry left
+20:59 <@mulander> $ doas smtpctl show queue 
+20:59 <@mulander> 9efdf4134b6c305c|local|mta|auth|mulander@tintagel.pl|mulander@tintagel.pl|mulander@tintagel.pl|1497464966|1497810566|1497466566|1|inflight|167|Connection closed unexpectedly
+20:59 <@mulander> I assume it will retry
+20:59 <@mulander> and the email will also land in my inbox
+20:59 <@mulander> my connection counter is up to 9 now
+20:59 <@mulander> I assume the increase is from 9efdf4134b6c305c failing a retry on a 'new' connection
+20:59 <@mulander> does anyone agree?
+20:59 <@mulander> it's back down to 8
+20:59 <@mulander> and email delivered
+21:00 <@mulander> I have 10 emails now in my inbox
+21:00 <@mulander> all that I sent, none lost
+21:00 <@mulander> the curr counter is up to 8 and staying there, the bug is indeed reproduced.
+21:00 <@mulander> our fstat:
+21:01 -!- Irssi: Pasting 8 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+21:01 <@mulander> _smtpd   smtpd      63585   24* internet stream tcp 0xffff800000445410 127.0.0.1:10026 <-- 127.0.0.1:43556         27431    22454
+21:01 <@mulander> _smtpd   smtpd      63585   25* internet stream tcp 0xffff80000041f220 127.0.0.1:10026 <-- 127.0.0.1:16619           650      185
+21:01 <@mulander> _smtpd   smtpd      63585   26* internet stream tcp 0xffff8000003d3c98 127.0.0.1:10026 <-- 127.0.0.1:44666           162       88
+21:01 <@mulander> _smtpd   smtpd      63585   27* internet stream tcp 0xffff80000038eb00 127.0.0.1:10026 <-- 127.0.0.1:13400           393      105
+21:01 <@mulander> _smtpd   smtpd      63585   28* internet stream tcp 0xffff80000041e500 127.0.0.1:10026 <-- 127.0.0.1:24442          1134      171
+21:01 <@mulander> _smtpd   smtpd      63585   29* internet stream tcp 0xffff800000478d20 127.0.0.1:10026 <-- 127.0.0.1:12347           722      111
+21:01 <@mulander> _smtpd   smtpd      63585   33* internet stream tcp 0xffff80000045f440 127.0.0.1:10026 <-- 127.0.0.1:1404          53409    44905
+21:01 <@mulander> _smtpd   smtpd      63585   36* internet stream tcp 0xffff800000488260 127.0.0.1:10026 <-- 127.0.0.1:49134         35197    44905
+21:01 <@mulander> so the problem is, clamscan can't keep up, the connection terminates and smtpd is aware of that
+21:01 <@mulander> as it marks the envelope for resending
+21:01 <@mulander> but the connection is never freed.
+21:01 <@mulander> this shows both in the fstat remaining open
+21:01 <@mulander> and the counter not going down
+21:01 < DuClare> "the connection"
+21:02 < DuClare> You still have two connections, right?
+21:02 < DuClare> smtpd -> clam -> smtpd
+21:02 < DuClare> The first connection is what closes, and smtpd deals with it appropriately.  The second connection is left hanging.
+21:03 <@mulander> but that would be clamd 10026 -->  25
+21:03 <@mulander> in stat right?
+21:04 < DuClare> Huh, no
+21:04 < DuClare> smtpd listens on 10026
+21:04 <@mulander> smtpd listens on port 25
+21:04 <@mulander> ah wait I got mixed up
+21:04 < kysse> amavis isnon 10025 or 10026
+21:05 < kysse> so you forward post from postfix to amavis and back to postfix
+21:07 <@mulander> ok I think I understand what DuClare was pointing out
+21:08 <@mulander> we get the email back from the same port but on a separate connection
+21:08 <@mulander> the opening one is properly terminated and the returning one is left hanging
+21:09 <@mulander> either way we kow the problem is in handling relaying off messages
+21:12 <@mulander> I was looking at my config to determine where to go in code
+21:13 < swankier> there is an article with a nice explanation (if you're using a similar setup):
+21:13 < swankier> http://technoquarter.blogspot.ca/2015/02/openbsd-mail-server-part-3-clamav-and.html
+21:13 < swankier> Outgoing mail: opensmtpd on lo0 -> relay untagged mail to clamsmtpd on port 10027 -> relay to clamd on port 3310 -> return to clamsmtpd -> return to opensmtpd on lo0 port 10028 and tag it CLAM_OUT -> relay out
+21:14 < swankier> but (and again if you're using a configuration like this) you show port 10026 open.
+21:14 < swankier> which is CLAM_IN
+21:15 <@mulander> that's the same setup I have
+21:15 < swankier> sorry: s/show port 10026 open/have open connections to port 10026/
+21:15 <@mulander> listen on lo0 port 10026 tag CLAM_IN  # incoming mail
+21:15 <@mulander> listen on lo0 port 10028 tag CLAM_OUT # outgoing mail
+21:15 < swankier> and that's 'CLAM_IN'
+21:16 <@mulander> accept tagged CLAM_IN for domain <vdomains> virtual <vusers> deliver to lmtp "/var/dovecot/lmtp"
+21:16 <@mulander> accept tagged CLAM_OUT for any relay via smtp://127.0.0.1:10030 # send to dkimproxy_out
+21:17 < swankier> so you have a socket open from clamav to clamsmtpd-in?
+21:18 < swankier> (or opensmtpd?)
+21:18 <@mulander> checking with fstat by process
+21:18 < swankier> Incoming mail: pf -> relay to spamd -> send to opensmtpd on lo0 -> relay untagged mail to clamsmtpd on port 10025 -> relay to clamd on port 3310 -> return to clamsmtpd -> return to opensmtpd on lo0 port 10026 and tag it CLAM_IN -> deliver to maildir
+21:19 <@mulander> https://gist.github.com/mulander/9d28885e4e2d2d5b21dc4b5648334a3f
+21:19 < swankier> so it's the socket form clamsmtpd -> opensmtpd on port 10026?
+21:19 < swankier> s/form/from/
+21:24 <@mulander> yes
+21:24 < martin__2> can we trigger this without clamav? using some other conection? Mabe not easy to test.
+21:25 < swankier> I think it should be possible to trigger with netcat
+21:25 <@mulander> hard to tell what's needed
+21:25 <@mulander> a large processing timeout or a connection close
+21:25 < swankier> nc localhost 10026&
+21:25 < swankier> then there will forever be an additional active connection
+21:25 < swankier> until the process is killed
+21:25 <@mulander> we don't know what killed the initial connection
+21:26 < swankier> we know that connections to 10026 do not time out.
+21:26 <@mulander> I think we have to start of reading when both outgoing and incoming connections are set up in code
+21:26 < DuClare> Do run that instance of netcat.  I suspect it will timeout.
+21:26 <@mulander> DuClare: there's a problem with that, it's a live email server
+21:27 < DuClare> What's the problem?
+21:27 <@mulander> guess no one should notice it for a short while
+21:27 < DuClare> I mean it's not going to block the whole server
+21:28 <@mulander> oh you mean connecting with netcat
+21:28 < DuClare> Yes.
+21:28 <@mulander> I was thinking about replacing clamav with nc
+21:28 <@mulander> connecting.
+21:28 < DuClare> To 10026.
+21:28 <@mulander> $ nc localhost 10026
+21:28 <@mulander> 220 tintagel.pl ESMTP OpenSMTPD
+21:28 <@mulander> connection count up to 9
+21:28 <@mulander> will try just killing it
+21:29 <@mulander> ^C accounted for
+21:29 < swankier> leave that running and see if it ever times out
+21:29 <@mulander> leaving it on
+21:29 < DuClare> It most likely will.  But I want to see.
+21:29 < DuClare> Triggering the hanging condition can be a little harder than just connecting :)
+21:30 < swankier> fair
+21:30 < swankier> in which case, tcpdump could be our frient
+21:30 < swankier> s/frient/friend
+21:30 < martin__2> Yeah, I also think that there must be some time out here
+21:30 < DuClare> There is
+21:31 < swankier> tcpdump -nnX port 10026 -w /tmp/port10026debug.pcap
+21:31 < swankier> then recreate the condition, then read a lot of output
+21:31 < swankier> with tcpdump -r /tmp/port10026debug.pcap
+21:32 < DuClare> That's going to be *a lot*
+21:32 < swankier> might not be any quicker than jumping into the code, though
+21:32 < swankier> however, you'll know the source port that hangs from the fstat output
+21:32 < swankier> so that could make grepping easier.
+21:33 < swankier> tcpdump -r /tmp/port10026debug.pcap port <source port than hung>
+21:33 < swankier> which shouldn't be too much, hopefully.
+21:33 <@mulander> it required 10 ~21MB emails to trigger
+21:34 <@mulander> granted it could possibly be triggered with a multiple of the smaller ones
+21:35 <@mulander> ok I see the counter dropped back to 8
+21:35 < DuClare> As I expected.
+21:35 <@mulander> even thoguh the netcat is still running
+21:35 < DuClare> If you try send something in netcat
+21:35 < DuClare> It'll probably complain about broken connection
+21:35 < swankier> my guess is that clamsmtpd is starting a conversation with opensmtpd, doing something like an ehlo, (perhaps some additional, maybe getting all the way to data), then crashing (never terminating the socket).
+21:35 <@mulander> $ nc localhost 10026 
+21:35 <@mulander> 220 tintagel.pl ESMTP OpenSMTPD
+21:35 <@mulander> test
+21:35 <@mulander> $ echo $?
+21:36 <@mulander> entered test\n after I was timd out in the counters
+21:36 < martin__2> So smtpd behaved correctly noe
+21:36 < martin__2> s/noe/now
+21:36 < swankier> nc localhost 10026
+21:36 < swankier> ehlo localhost
+21:36 < swankier> rcpt to: <your email address>
+21:36 < swankier> mail from: <other email address>
+21:36 < swankier> data
+21:36 < swankier> now wait
+21:36 <@mulander> that will be problematic
+21:37 <@mulander> I would have to tls
+21:37 < swankier> I don't have those commands memorized :P
+21:37 <@mulander> looking up
+21:37 < swankier> starttls
+21:38 < swankier> openssl s_client -debug -starttls smtp -crlf -connect localhost:10026
+21:39 < swankier> (instead of nc)
+21:39 < DuClare> Why would you have to tls?
+21:40 < swankier> assuming he doesn't allow plaintext connections at all?
+21:40 < swankier> (which would be odd, come to think of it)
+21:40 < DuClare> Is tls now the default for any open port?  Because I didn't see him use the tls keyword..
+21:40 < DuClare> 22:15 <@mulander> listen on lo0 port 10026 tag CLAM_IN  # incoming mail
+21:41 -!- Irssi: Pasting 9 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+21:41 <@mulander> $ nc localhost 10026    
+21:41 <@mulander> 220 tintagel.pl ESMTP OpenSMTPD
+21:41 <@mulander> EHLO localhost
+21:41 <@mulander> 250-tintagel.pl Hello localhost [127.0.0.1], pleased to meet you
+21:41 <@mulander> 250-8BITMIME
+21:41 <@mulander> 250-ENHANCEDSTATUSCODES
+21:41 <@mulander> 250-SIZE 36700160
+21:41 <@mulander> 250-DSN
+21:41 <@mulander> 250 HELP
+21:41 < swankier> and with the openssl command?
+21:42 <@mulander> no cert, it just wants me to auth
+21:43 < swankier> use the HELP verb to see what's available
+21:43 -!- Irssi: Pasting 5 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+21:43 <@mulander> HELP
+21:43 <@mulander> 214- This is OpenSMTPD
+21:43 <@mulander> 214- To report bugs in the implementation, please contact bugs@openbsd.org
+21:43 <@mulander> 214- with full details
+21:43 <@mulander> 214 2.0.0: End of HELP info
+21:44 < swankier> lol.
+21:44 <@mulander> doesn't it at this point expect an already made nevelope?
+21:44 < swankier> I wouldn't imagine so.  Each connection would be treated like a complete smtp message, I would expect.
+21:45 < swankier> but you don't specify auth in your config, I don't think... so I'm curious why auth would be necessary.
+21:46 < swankier> s/auth/credentials/
+21:46 <@mulander> I'll do it differently
+21:46 <@mulander> will try sending from nc localhost 25
+21:46 < DuClare> I don't see what the problem was, but whatever..
+21:47 <@mulander> DuClare: it's not allowing me to use MAIL FROM, RCPT TO etc.
+21:47 < DuClare> What does it say?
+21:47 < DuClare> Exactly
+21:47 <@mulander> huh
+21:47 <@mulander> it works
+21:48 <@mulander> must have typoed before
+21:49 <@mulander> MAIL FROM: <mulander@tintagel.pl>
+21:49 <@mulander> 250 2.0.0: Ok
+21:49 <@mulander> RCPT TO: <mulander@tintagel.pl>
+21:49 <@mulander> 250 2.1.5 Destination address valid: Recipient ok
+21:49 <@mulander> DATA
+21:49 <@mulander> 354 Enter mail, end with "." on a line by itself
+21:50 -!- Irssi: Pasting 6 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+21:50 <@mulander> 354 Enter mail, end with "." on a line by itself
+21:50 <@mulander> From: mulander@tintagel.pl
+21:50 <@mulander> To: mulander@tintagel.pl
+21:50 <@mulander> Subject: Test
+21:50 <@mulander> this is a test, not done
+21:50 <@mulander> ---
+21:50 <@mulander> letting it sit on that ^
+21:56 <@mulander> I think it dropped
+21:56 <@mulander> counter is back to 8
+21:56 <@mulander> this is a test, not done
+21:56 <@mulander> test
+21:56 <@mulander> $ 
+21:56 <@mulander> so it closed off
+21:57 <@mulander> 21:56 < umaxx> really if you start smtpd -dv -Tall you may be able to figure out where exactly the session die, you at least may be able to see where it not dies, e.g. logs until where it 
+21:57 <@mulander>                comes :)
+21:57 <@mulander> 21:56 < umaxx> my gramar is bad today
+21:57 <@mulander> 21:56 < umaxx> but I guess you know what I mean
+21:57 <@mulander> part of log from #opensmtpd
+21:59 <@mulander> I will try that tomorrow if we don't get a better idea on how to reproduce
+21:59 <@mulander> obviously would prefer not to on my email machine
+21:59 <@mulander> ok I'm calling it a wrap for today, sorry that we didn't hit any code reading but at least w were successfull with reproducing the issue
+22:00 <@mulander> big thanks to everyone present during the read who helped hinting what to look at - you helped a lot
+22:00 <@mulander> --- DONE ---

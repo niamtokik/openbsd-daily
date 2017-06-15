@@ -1,0 +1,297 @@
+21:02 [Users #openbsd-daily]
+21:02 [@mulander      ] [ brianritchie] [ duncaen ] [ IcePic   ] [ phy1729  ] [ skrzyp       ] 
+21:02 [ abetusk       ] [ bruflu      ] [ ebag    ] [ imaginary] [ poptart  ] [ Soft         ] 
+21:02 [ acgissues     ] [ brynet      ] [ edlm10  ] [ jbernard ] [ pragu    ] [ stateless    ] 
+21:02 [ administraitor] [ bsdtux      ] [ ekr     ] [ kAworu   ] [ qbit     ] [ Technaton    ] 
+21:02 [ akkartik      ] [ carlochess  ] [ erethon ] [ kittens  ] [ radio2034] [ thrym        ] 
+21:02 [ akoshodi      ] [ cengizIO    ] [ erodger ] [ kpcyrd   ] [ rain1    ] [ timclassic   ] 
+21:02 [ ar            ] [ commandoline] [ Evil_Bob] [ mandarg  ] [ rajak    ] [ vbarros      ] 
+21:02 [ asie          ] [ corbyhaas   ] [ eyl     ] [ mfgmfg   ] [ saul`    ] [ vyvup        ] 
+21:02 [ augu          ] [ davl        ] [ fcambus ] [ MurphSlaw] [ sdafsd   ] [ wilornel     ] 
+21:02 [ bcd           ] [ deei        ] [ fcbsd   ] [ nacci    ] [ see4555  ] [ WubTheCaptain] 
+21:02 [ bch           ] [ dostoyesvky ] [ ggg`    ] [ noexcept_] [ selckin  ] [ xul___       ] 
+21:02 [ benpicco      ] [ DuClare     ] [ ghostyy ] [ pepton   ] [ skizye   ] [ zyklon       ] 
+21:02 -!- Irssi: #openbsd-daily: Total of 72 nicks [1 ops, 0 halfops, 0 voices, 71 normal]
+21:03 <@mulander> --- code read: /usr/bin/nc and how it uses LibTLS
+21:03 -!- Topic for #openbsd-daily: Read one OpenBSD source file per day | commits: 1 | Today: /usr/bin/nc and how it uses LibTLS | Channel rules: https://ptpb.pw/cnx1 | Code reading starts: 21:00 GMT+2
+21:03 -!- Topic set by mulander [~mulander@tintagel.pl] [Fri Jun  9 20:22:37 2017]
+21:03 <@mulander> first of, hi to all 72 of you, please see the channel rules after joining, this is not a solo show but a group reading
+21:03 <@mulander> so interruptions are allowed but let's try to keep the chat on topic and moving the reading forward
+21:04 <@mulander> the time window is around 1h-1.5h after that we will most probably just stop and resume the next day
+21:05 <@mulander> ** goal: read nc sources with the focus on TLS features - read the code that runs when we connect nc to https://blog.tintagel.pl **
+21:05 <@mulander> for anyone joining, what we are talking about is the OpenBSD nc, not the netcat typically found on other *nixes
+21:05 <@mulander> you can find the sources here: https://github.com/openbsd/src/tree/master/usr.bin/nc
+21:06 <@mulander> I like to start off by groking how large a program is in itself, running cloc on the folder shows
+21:06 <@mulander> ~1800 LoC
+21:07 <@mulander> we will not be reading the whole thing, but tryin to focus on the flow the code goes through when negotiating an http tls session.
+21:08 <@mulander> let's open up the manpage first http://man.openbsd.org/nc
+21:08 <@mulander> and just do a quick look through occurrences for TLS
+21:08 <@mulander> we want to grok what type of functionality is supported
+21:09 <@mulander> interesting its are -C for specyfing a certfile, -e for checking if a peer cert is present, -H allowing us to pass a specific hash
+21:10 <@mulander> -K for loading a private key
+21:10 <@mulander> -o for OSCP stapling
+21:11 <@mulander> and -R -t and -Z, won't copy the whole man here ;)
+21:11 <@mulander> we might not need most of them, nor even trigger them but it's nice to know that some things are optional
+21:11 <@mulander> and we might see them in code
+21:11 <@mulander> the example section shows sample connection to a 443 port
+21:12 <@mulander> so let's try nc -v -c blog.tintagel.pl 443
+21:12 <@mulander> skipping the -e as we don't want to check anything apart from connecting
+21:13 -!- Irssi: Pasting 10 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+21:13 <@mulander> $ nc -c -v blog.tintagel.pl 443
+21:13 <@mulander> Connection to blog.tintagel.pl 443 port [tcp/https] succeeded!
+21:13 <@mulander> TLS handshake negotiated TLSv1.2/ECDHE-RSA-AES256-GCM-SHA384 with host blog.tintagel.pl
+21:13 <@mulander> Peer name: blog.tintagel.pl
+21:13 <@mulander> Subject: /CN=tintagel.pl
+21:13 <@mulander> Issuer: /C=US/O=Let's Encrypt/CN=Let's Encrypt Authority X3
+21:13 <@mulander> Valid From: Thu Apr 27 04:01:00 2017
+21:13 <@mulander> Valid Until: Wed Jul 26 04:01:00 2017
+21:13 <@mulander> Cert Hash: SHA256:1746b1d2ecdf8ad1fb7e06a6c97154b2c1a87eee65f5654824d0a0dc0af4ba98
+21:13 <@mulander> OCSP URL: http://ocsp.int-x3.letsencrypt.org/
+21:13 <@mulander> looks good, time to jump to code
+21:14 <@mulander> first up the Makefile, we see nc is linked against 3 libraries
+21:14 <@mulander> tls, ssl and crypto
+21:15 <@mulander> we will open open their man pages up while encountering their use in code
+21:15 <@mulander> nc is split into 3 sections
+21:15 <@mulander> socks.c - socket handling
+21:16 <@mulander> atomicio.[ch] - for atomic input / output operations on our sockets
+21:16 <@mulander> netcat.c - the main beef of the program
+21:17 <@mulander> file starts with a bunch of includes, defines and global flags - most probably for getopt parsed values
+21:17 <@mulander> each one is documented with a comment, but we won't go through them one by one
+21:17 <@mulander> then we hit forward declared functions and finally main
+21:18 <@mulander> L148
+21:18 <@mulander> we start of with a bunch of defines for passed in values from the command line, config, host, port etc.
+21:18 <@mulander> we already see some initial tls code
+21:18 <@mulander> 	struct tls_config *tls_cfg = NULL;
+21:18 <@mulander> 	struct tls *tls_ctx = NULL;
+21:19 <@mulander> those values will be probably used to drive a created tls connection
+21:20 < WubTheCaptain> If we go back a little bit, on line 57 the #include for tls.h doesn't seem to be in alphabetical order. If the intention of this is to also cleanup the code surrounding LibTLS.
+21:20 < WubTheCaptain> in nc
+21:21 <@mulander> noted, if we end up editing nc we will add moving the includes around
+21:22 <@mulander> next up signal(SIGPIPE, SIG_IGN)
+21:22 <@mulander> is documented in signal(3)
+21:22 <@mulander> http://man.openbsd.org/signal.3
+21:22 <@mulander> this particular call ignores the SIGPIPE signal
+21:23 <@mulander> SIGPIPEterminate processwrite on a pipe with no reader
+21:23 <@mulander> next up standard getopt parsing
+21:23 <@mulander> we saw that both in doas and htpasswd
+21:24 <@mulander> I'm skimmin through it looking for options impacting tls
+21:24 <@mulander> as sometimes a flag might be changed based on a different option
+21:26 <@mulander> nothing worth checking now
+21:26 <@mulander> map_tls stood out a bit but we didn't need to set -T on our first call to nc
+21:26 <@mulander> next up we have pledging
+21:27 <@mulander> depending on the selected options privileges of the process are dropped
+21:27 <@mulander> which pledge are we runnign with when calling nc -v -c blog.tintagel.pl 443?
+21:27 <@mulander> let's check
+21:27 < rain1> why is there 2 sections of pledge? one at 349 another at 480
+21:27 <@mulander> I didn't get there yet, but that's typical
+21:28 <@mulander> pledge can be always further narrowed down
+21:28 <@mulander> ie. you might claim that you need stdio and dns
+21:28 <@mulander> pledge("stdio dns")
+21:28 <@mulander> and at some point in the program you did all the dns requests you ever wanted to do
+21:28 <@mulander> so from now on you pledge to only use stdio
+21:28 <@mulander> pledge("stdio")
+21:29 <@mulander> if after that spot you make a dns request - your software will die.
+21:29 <@mulander> I actually found a "feature" in telnet that tried to do this after the privileges were dropped
+21:29 <@mulander> remind me later I'll link you the commit and marc.info thread
+21:29 < rain1> i see! but the second pledge has more things in it than the first one
+21:30 <@mulander> not possible
+21:30 < brynet> The initial pledge may also change depending on the evaluated arguments, as in this case, going back to getopt, '-c' sets the usetls global variable.
+21:30 <@mulander> line 349 is pledging conditionally
+21:30 <@mulander> depending on the options picked
+21:31 < brynet> The additional requirement being "rpath", presumably to read TLS certificate files.
+21:32 < IcePic> family = AF_UNIX would be a socket or pipe or something, and not netbased (and hence not TLSed)
+21:32 < IcePic> for the 349 pledge
+21:33 <@mulander> yep, we are not AF_UNIX
+21:33 <@mulander> we are also not Fflag
+21:34 < WubTheCaptain> For the newcomers, pledge(2) can be mainly found on OpenBSD, it's not in all *nix bases. man: http://man.openbsd.org/pledge Hackfest 2015 presentation: https://www.openbsd.org/papers/hackfest2015-pledge/
+21:34 <@mulander> and we are not over proxy so not Pflag
+21:34 <@mulander> but we are usetls
+21:34 <@mulander> from the -c flag
+21:34 <@mulander> and this means that we pledged:
+21:34 <@mulander> 	} else if (usetls) {
+21:34 <@mulander> 		if (pledge("stdio rpath inet dns", NULL) == -1)
+21:35 < rain1> im a bit curious about if Pflag and usetls were true, but maybe that's a diversion..
+21:36 <@mulander> next up we grab the host and port and perform further flag combo rules
+21:36 <@mulander> then it would pledge line 359
+21:36 <@mulander> for the proxy
+21:36 <@mulander> and re-pledge line 482
+21:37 < rain1> could it be a bug that it's missing rpath in this case?
+21:39 <@mulander> I'm checking git blame
+21:39 < WubTheCaptain> What needs rpath anyway?
+21:39 <@mulander> WubTheCaptain: probably reading the cert file
+21:39 <@mulander> ie when passed with -C
+21:40 < WubTheCaptain> I'd imagine that to be stdio permission
+21:41 <@mulander> https://github.com/openbsd/src/commit/b0ad1c395ce0331f75ce276286cdde6ab13903cd added rpath
+21:42 < WubTheCaptain> Ah, cool
+21:42 <@mulander> it might actually really be missing doesn't it?
+21:42 <@mulander> when calling nc -P -c
+21:42 <@mulander> it would try to re-pledge with rpath that wasn't pleged in Pflag
+21:42 < rain1> il test it in my openbsd vm
+21:43 <@mulander> it's worth to check now
+21:44 <@mulander> hah
+21:44 <@mulander> we have a bug
+21:44 <@mulander> $ nc -Ptest -v -c blog.tintagel.pl 443
+21:44 <@mulander> nc: pledge: Operation not permitted
+21:44 <@mulander> rain1: congrats for spotting it
+21:44 < rain1> wew! \o/
+21:44 <@mulander> want to cook a diff to fix it up?
+21:44 < rain1> okay!
+21:45 < rain1> that'll make my first 2 obsd patches today
+21:45 <@mulander> need help with that or do you know your way around?
+21:45 < rain1> i know how to make a diff but not who to send and so on
+21:45 < WubTheCaptain> tech@ mailing list
+21:46 < smiles`> mulander: just read your blog about this through hacker news very kool idea
+21:46 < WubTheCaptain> https://www.openbsd.org/mail.html
+21:46 <@mulander> rain1: make a diff, you email it to tech@openbsd.org
+21:46 <@mulander> subject: nc: missing rpath pledge for -P
+21:46 < WubTheCaptain> You may need to subscribe to the mailing list first to get your message through
+21:46 <@mulander> be sure to format plain text
+21:46 <@mulander> and the diff attached inline
+21:46 < qbit> :D
+21:47 < qbit> mulander: o/
+21:47 < qbit> rain1: o/
+21:47 <@mulander> qbit: \O
+21:47 <@mulander> we're fixing bugs here :)
+21:47 < DuClare> I don't think you need to subscribe?
+21:47 < DuClare> You'll be greylisted either way, if you're not sending from a popular host.
+21:48 <@mulander> rain1: if you need more help with that just yell :)
+21:48 < WubTheCaptain> I don't know how it works with Majordomo, but I'd imagine it may get stuck into moderation queue. At least it does by default in GNU Mailman.
+21:48 <@mulander> rain1: oh also make sure to include the failing call in the mail
+21:49 < rain1> I used this command: git format-patch -1 HEAD
+21:49 < rain1> http://ix.io/wUO and that's the diff
+21:49 <@mulander> rain1: you should do it against cvs
+21:49 < rain1> oh of course!
+21:49 < rain1> il do that now, so feel free to continue !
+21:50 <@mulander> link the marc.info thread when it's sent please! :)
+21:50 <@mulander> ok back on topic
+21:50 <@mulander> we stopped at 415
+21:50 <@mulander> skipping all 'this flag can't be used with that flag' verifications
+21:51 <@mulander> we are again not AF_UNIX
+21:51 <@mulander> so we skip grabbing the datagram client
+21:51 <@mulander> first bit of code for us
+21:51 <@mulander> initializing addrinfo
+21:52 <@mulander> the memset is zeroing out the addrinfo structure, we then set the socket family, socket type to stream and protocol tcp
+21:52 <@mulander> we then jump into the usetls section
+21:53 <@mulander> we do the re-pledge based on our options
+21:54 <@mulander> wondering what changes between the pledges we had
+21:54 <@mulander> and this one
+21:54 <@mulander> we are never AF_UNIX
+21:55 <@mulander> ok so we are either dropping tty or sendfd
+21:55 <@mulander> by doing this re-pledge
+21:55 <@mulander> correction, just sendfd in case we were Fflag
+21:55 <@mulander> next we have our first LibTLS api call
+21:56 <@mulander> let's open up the man for that code
+21:57 <@mulander> http://man.openbsd.org/tls_init
+21:57 <@mulander> LibTLS is the new API replacing the OpenSSL Tentacle Programming Interface
+21:57 <@mulander> behind the scenes it implements it's functionality by calling into openssl
+21:58 <@mulander> and trying to provide a sane, safe default interface
+21:58 <@mulander> there are 2 paths we can choose now
+21:58 <@mulander> take the section 480 to 520
+21:58 <@mulander> and go one level below into the tls calls to see how they are implemented
+21:59 <@mulander> or do quick 'this call does this' overvie
+21:59 <@mulander> w
+21:59 <@mulander> and move on till we have our connection
+21:59 <@mulander> (as we are trying to fit in the remaining 30 minutes)
+21:59 <@mulander> which route do we take?
+22:00 <@mulander> let's do an overview till end of main
+22:00 <@mulander> and see how much time we have let
+22:00 <@mulander> *left
+22:00 <@mulander> The tls_init() function initializes global data structures. It should be called once before any other functions. It may be called more than once, but not concurrently.
+22:01 <@mulander> The tls_config_new() function allocates, initializes, and returns a new default configuration object that can be used for future connections.
+22:01 <@mulander> the set_ca_file, cert_file, key_file and oscp staple file are self documenting
+22:01 <@mulander> tls_config_error returns the error associated with the provided configuration context
+22:02 <@mulander> line 499 depending if we used TLS_ALL sets all protocols
+22:02 <@mulander> this might be interesting to check, so let's stop here for a sec
+22:02 <@mulander> http://man.openbsd.org/tls_config_set_protocols.3
+22:03 -!- Irssi: Pasting 7 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+22:03 <@mulander> tls_config_set_protocols() specifies which versions of the TLS protocol may be used. Possible values are the bitwise OR of:
+22:03 <@mulander> TLS_PROTOCOL_TLSv1_0
+22:03 <@mulander>  
+22:03 <@mulander> TLS_PROTOCOL_TLSv1_1
+22:03 <@mulander>  
+22:03 <@mulander> TLS_PROTOCOL_TLSv1_2
+22:03 <@mulander>  
+22:03 <@mulander> Additionally, the values TLS_PROTOCOL_TLSv1 (TLSv1.0, TLSv1.1 and TLSv1.2), TLS_PROTOCOLS_ALL (all supported protocols) and TLS_PROTOCOLS_DEFAULT (TLSv1.2 only) may be used.
+22:03 <@mulander> the default is TLSv1.2 only
+22:04 <@mulander> so the -T option allows us to connect with servers that don't support the latest protocol
+22:05 <@mulander> next calls with insecure in their name explicitly disable verifications if the user asked for them
+22:05 <@mulander> and again we are re-pledging
+22:05 <@mulander> dropping rpath
+22:06 <@mulander> L525 is a different codepath - lflag
+22:06 <@mulander> for a listening server when nc is the one accepting connections
+22:06 <@mulander> that is not our case so we skip the if
+22:06 < ghostyy> this might be a bit ahead, but i have a question - on line 565 it allocates a buffer of 16384 bytes, but it only seems to read 2048 of them
+22:06 <@mulander> L616 we are not AF_UNIX so we skip the branch
+22:06 <@mulander> L634
+22:06 <@mulander> build_ports
+22:06 < ghostyy> oh i guess that's another branch, sorry!
+22:07 <@mulander> ghostyy: well it's interesting to check
+22:07 <@mulander> ghostyy: start off with git blame and see when those lines were modified
+22:08 <@mulander> and read man recvfrom
+22:08 < WubTheCaptain> http://man.openbsd.org/recvfrom
+22:09 <@mulander> build_ports is defined in 1386
+22:09 <@mulander>  * build_ports()
+22:09 <@mulander>  * Build an array of ports in portlist[], listing each port
+22:09 <@mulander>  * that we should try to connect to.
+22:11 <@mulander> we provide a single port, but it's an interesting bit of code
+22:11 <@mulander> a nice side branch to read as homework
+22:11 <@mulander> 		 * Initialize portlist with a random permutation.  Based on
+22:11 <@mulander> 		 * Knuth, as in ip_randomid() in sys/netinet/ip_id.c.
+22:12 <@mulander> L636
+22:12 <@mulander> - /* Cycle through portlist, connecting to each port. */
+22:12 <@mulander> we only have a single port
+22:12 <@mulander> we do use tls so inside L641
+22:12 <@mulander> we obtain a context from tls_client
+22:13 <@mulander> http://man.openbsd.org/tls_client.3
+22:13 <@mulander> A TLS connection is represented as a struct tls object called a "context". A new context is created by either the tls_client() or tls_server() functions. tls_client() is used in TLS client programs, tls_server() in TLS server programs.
+22:13 <@mulander> The context can then be configured with the function tls_configure(). The same tls_config object can be used to configure multiple contexts.
+22:13 <@mulander> and we perform a connection
+22:14 <@mulander> xflag handles a proxy connection
+22:14 < IcePic> so get a tls context, get a socket, then tls over the socket
+22:14 < rajak> sorry, not really following the group audit but noticed line 512 has a missing space missing in the error message if someone wants to fix that too. ;-)
+22:14 < rajak> $ nc -H 1231321 -T noverify -c localhost 22
+22:14 < rajak> nc: -H and -T noverify may not be usedtogether
+22:15 <@mulander> rajak++ :)
+22:15 <@mulander> rain1: you can include that in your tech@ submission if rajak doesn't want to cook a diff himself
+22:15 <@mulander> still rajak thanks for pointing it out
+22:15 < WubTheCaptain> Good catch. I read the same line and didn't think of it.
+22:15 < rain1> (I'm not able to download the cvs sources, even tried some mirrors)
+22:15 < rajak> yeah, please roll it up for me, i'm at work and can't really follow this right now.
+22:16 <@mulander> rain1: https://www.openbsd.org/anoncvs.html
+22:16 <@mulander>  start by downloading a tar.gz will speed up things amazingly
+22:16 <@mulander> and try hostserver.de for the upate
+22:16 < rain1> oh okay!
+22:17 <@mulander> socks_connect and remote_connect are from socks.c
+22:17 <@mulander> we won't be able to cover them fully today
+22:18 <@mulander> but tls is around that layer and socks.c doesn't call any libtls API
+22:18 <@mulander> so I will skip it to fit in  the alloted time
+22:19 <@mulander> we end up in L687
+22:19 <@mulander> tls_setup_client
+22:19 < brianpc> thanks for posting on /r/programming mulander ! love this idea, can't guarantee I'll havev time to participate but wanted to at least idle in here.
+22:20 < brianpc> I've been reading a lot of source while doing some basic C programming on openbsd and it's been a lot of fun.
+22:20 <@mulander> trying to find tls_setup_client
+22:21 <@mulander> and it's defined in netcat.c
+22:21 <@mulander> a bit misleading, as it looks like part of the tls api
+22:21 <@mulander> this function takes our context, the socket and the host
+22:21 <@mulander> connects the socket wrapping it with tls
+22:21 <@mulander> http://man.openbsd.org/tls_connect_socket.3
+22:22 <@mulander> This function will create a new socket, connect to the specified host and port, and then establish a secure connection. The port may be numeric or a service name. If it is NULL, then a host of the format "hostname:port" is permitted.
+22:22 <@mulander> timeout_tls is also defined here
+22:22 <@mulander> it uses poll to timeout the connection
+22:23 <@mulander> report_tls
+22:23 <@mulander> is a function grabbing various things from our connection and context
+22:23 <@mulander> that's the nice output we saw after our server connected
+22:24 <@mulander> certificate verification and that's it
+22:24 <@mulander> a final free for the context
+22:24 <@mulander> and a free for the tls_cfg
+22:24 <@mulander> before exiting main
+22:24 <@mulander> 7 minutes left
+22:24 <@mulander> thinsk that's a bit too little to jump underneath how libtls itelf is implemented
+22:25 <@mulander> we went through most of the code that executes when issuing our initial connection to my blog
+22:25 <@mulander> found two bugs on our way there
+22:26 <@mulander> 1. missing pledge potted by rain1 
+22:26 <@mulander> 2. typo in printf output spotted by rajak 
+22:26 <@mulander> congrats and thanks for participating!
+22:26 <@mulander> --- DONE ---
+22:26 < rain1> thanks!
+22:26 < kAworu> I know we're not AF_UNIX but around L416 the unchecked strlcpy(3) plus mktemp(3) (instead of mkstemp(3)) bugs me a little
