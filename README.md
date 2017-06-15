@@ -23,7 +23,9 @@ Copies are made on this repository (origin/).
 
 ## Project
 
-Made a more readable and editable version of those reading.
+Made a more readable and editable version of those reading. Asciidoc
+was selected for this format, so, you need to install it if you want
+to generate html/epub/pdf files.
 
 ## License
 
