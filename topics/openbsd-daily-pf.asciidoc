@@ -29,6 +29,7 @@ and statefull tracking of connections. Outside of OpenBSD it's well
 know for a sane, human readable syntax. For a quick example, here is a
 set of rules that block brute force attemts on ssh:
 
+[txt]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 table <children> persist file "/etc/pf.children"
 block in quick proto tcp from <children> to any
@@ -89,7 +90,8 @@ sys admin need to reload the configuration is the parsing code
 somewhere in the kernel or in some userland utilities.  We already see
 `parse.y` in the linked `pfctl` folder and a quick grep of `/etc`
 reveals that `rc` indeed calls `pfctl` to load the rules on boot:
- 
+
+[txt]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
  /etc/rc:        print -- "$RULES" | pfctl -f -
  /etc/rc:        pfctl -e
@@ -239,6 +241,7 @@ ______________________________________________________________________
 ______________________________________________________________________
 
 
+[sh]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
  $ ls -alh /dev/pf
  crw-------  1 root  wheel   73,   0 Jun 10 16:13 /dev/pf
@@ -266,6 +269,7 @@ behaves the same way regardless where in C it's evoked a usage
 function for outputting help and we are starting to see `pfctl_*`
 functions. let's stop on.
 
+[c]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 int
 pfctl_enable(int dev, int opts)
@@ -308,6 +312,7 @@ First hits are some man pages. One promising thing is
 looks like that's it. Opening up `sys/net/pf_ioctl` and behold here it
 is.
 
+[c]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
          case DIOCSTART:
                  if (pf_status.running)
@@ -359,6 +364,7 @@ interesting, I think that's an explicit example in the man page
 To print the main ruleset recursively, specify only '*' as the anchor
 name:
 
+[sh]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 pfctl -a '*' -sr
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -378,6 +384,7 @@ connections but won't remove existing ones
  
 To do that, you can invokes:
 
+[sh]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 pfctl -k ${IP_ADDRESS}
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -396,6 +403,7 @@ ______________________________________________________________________
 http://code.metager.de/source/xref/OpenBSD/src/sbin/pfctl/pfctl.c
 doesn't have line 2527
 
+[sh]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
  $ doas pfctl -S test.state 
  $ ls -alh test.state
@@ -408,6 +416,7 @@ doesn't have line 2527
 
 You can looks at header:
 
+[sh]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
  - /*$OpenBSD: pfctl.c,v 1.332 2015/12/10 17:27:00 mmcc Exp $ */
  my file
@@ -481,6 +490,7 @@ ah it's not even for rules but for tags
 
  a tag is like a variable,
 
+[txt]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 tag string
  
@@ -511,7 +521,8 @@ in DIOCADDRULE. There's a WITH_PF_LOCK, a read write lock on the pf code,
  https://github.com/openbsd/src/commit/956659a2c9191e0927b4f56584d8209ea85115f5.
  Then we are at `pf_attach`.
  pool-init comes from `sys/kern/subr_pool.c`
- 
+
+[txt]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   * Initialize the given pool resource structure.
   *
@@ -521,6 +532,7 @@ in DIOCADDRULE. There's a WITH_PF_LOCK, a read write lock on the pf code,
 
 Line 49 of that file describes what this API is used for
 
+[c]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   * Pool resource management utility.
   *
@@ -550,15 +562,20 @@ So I tend to grep for `^fn` as by style(9) function are defined as
 function without the noise but obviously fails for macros.
 
 Ok next we define 2 red black trees, one for src address tracking, and
-second one for anchors. We initialize the ruleset
+second one for anchors. We initialize the ruleset in `sys/net/pfvar.h`.
 
-`sys/net/pfvar.h`
+[txt]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
  1385:#define PFR_KENTRY_HIWAT_SMALL     100000  /* Number of entries for tiny hosts */
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Line 189 mentions garbage collection. I didn't knew pf internally had one. Then we initialize default timeouts with `pf_normalize_init` for initializing the subsystem responsible for packet normalization. Bzero'ing the pf_status struct and an interesting `XXX` comment:
+Line 189 mentions garbage collection. I didn't knew pf internally had
+one. Then we initialize default timeouts with `pf_normalize_init` for
+initializing the subsystem responsible for packet
+normalization. Bzero'ing the pf_status struct and an interesting `XXX`
+comment:
 
+[c]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
  228    /* XXX do our best to avoid a conflict */
  229    pf_status.hostid = arc4random();
@@ -585,6 +602,7 @@ Next we have rules application and rollback followed by queue removal
 code.  There's a queue interface struct and `pf_ifp2q` converting an
 interface to a `pf_queue` interface
 
+[c]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
  559 struct pf_queue_if {
  560    struct ifnet        *ifp;
