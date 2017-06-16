@@ -1,7 +1,11 @@
 # OpenBSD Daily Reading
 
-This is an unofficial repository made from reading by duncaen and
+This is an official repository made from readings by duncaen and
 mulander (irc.freenode.net/#openbsd-daily).
+
+The repository was created by
+[@niamtokik](https://github.com/niamtokik) who also works on
+converting the logs to a more readable format (Thanks!).
 
 ## Original reading
 
@@ -31,5 +35,6 @@ to generate html/epub/pdf files.
 ## License
 
 All works are licensed under CC-BY-4.0
-(https://creativecommons.org/licenses/by/4.0/) and belong to their own authors.
-A copy of this license is available on this repository too.
+(https://creativecommons.org/licenses/by/4.0/) and belong to their own
+authors.  A copy of this license is available on this repository too.
+
