@@ -24,60 +24,61 @@ Helpers:
 //////////////////////////////////////////////////////////////////////
 
 = Topic Name
-:author: Firstname LastName
-:authorNick: Nickname
-:email: AuthorEmail
-:editor: Firstname Lastname
-:editorNick: Nickname
-:editorEmail: EditorEmail
-:date: RawCreationDate
-:revision: LastModificationDate
+:author: mulander
+:authorNick: mulander
+:email: mulander@openbsd.org
+:editor: Mathieu Kerjouan
+:editorNick: niamtokik
+:editorEmail: contact@steepath.eu
+:date: 2017-06-06
+:revision: 2017-06-16
 :copyright: CC-BY-4.0
-:description: Summarize Topic Here +
-              this is atest
-:keywords: keywordA,keywordB,keywordN
-:originUrl: Origin Url for Raw IRC Logs
-:source: UrlSource
+:copyrightUrl: https://creativecommons.org/licenses/by/4.0/
+:description: Summary here
+:keywords: Keywords Here
+:originUrl: Link URL
+:source: #openbsd-daily
+:sourceUrl: `irc://irc.freenode.net/{source}`
 :lang: en
 :toc2:
 :icons:
 :data-uri:
 
+:MAN:    https://man.openbsd.org
 :CVS:    https://cvsweb.openbsd.org/cgi-bin/cvsweb
 :BXR:    http://bxr.su/OpenBSD
 :GITHUB: https://github.com
+:GIST:   https://gist.github.com
 
 == License
 
-{copyright}
+{copyright}.
+ifdef::copyrightUrl[]
+Full license is available at this URL: {copyrightUrl}.
+endif::copyrightUrl[]
 
 == Acknowledgement
 
 ifdef::author[]
-This document was originaly created by {author} aka {authorNick}
-<{email}> on {date}.
+This document was originaly created ({date}) by {author} a.k.a
+{authorNick} <{email}>.
 endif::[]
 
 ifdef::source[]
-Raw documentation source is available at {source}.
+Raw documentation source is available at {originUrl} and was recorded
+from {sourceUrl}.
 endif::source[]
 
 ifdef::editor[]
-This document was edited by {editor} aka {editorNick}
-<{editorEmail}> on {revision}.
+This document was edited ({revision}) by {editor} a.k.a {editorNick}
+<{editorEmail}>.
 endif::editor[]
 
 == Summary
 
 {description}
 
-== Goal
-
- * {BXR}/this/is/a/test[test]
- * {CVS}/this/is/a/test[test2]
- * {GITHUB}/this/is/a/test[test3]
-
-== Subject reading
+== Content
 
 [sh]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
