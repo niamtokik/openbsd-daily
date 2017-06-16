@@ -16,8 +16,9 @@ You can find original reads here:
  * https://junk.tintagel.pl/openbsd-daily-pf-2.txt
  * https://junk.tintagel.pl/openbsd-daily-rebound-2.txt
  * https://junk.tintagel.pl/openbsd-daily-pfctl-diff.txt
- * https://junk.tintagel.pl/openbsd-daily-smtpd-1.txt
- * https://junk.tintagel.pl/openbsd-daily-smtpd-2.txt
+ * 2017-06-13: https://junk.tintagel.pl/openbsd-daily-smtpd-1.txt
+ * 2017-06-14: https://junk.tintagel.pl/openbsd-daily-smtpd-2.txt
+ * 2017-06-15: https://junk.tintagel.pl/openbsd-daily-smtpd-3.txt
 
 Copies are made on this repository (origin/).
 
