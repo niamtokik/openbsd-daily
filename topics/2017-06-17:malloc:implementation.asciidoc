@@ -146,9 +146,9 @@ compiled in by default and with that option malloc additionally
 {BXR}/lib/libc/stdlib/malloc.c#106[tracks the source of the
 allocation].
 
-[NOTE] This was introduced in a time before the valgrind port for
-       OpenBSD (I still don't know how well it works, never tried
-       it?). So that's one way to look out for and track memory leaks.
+NOTE: This was introduced in a time before the valgrind port for
+      OpenBSD (I still don't know how well it works, never tried
+      it?). So that's one way to look out for and track memory leaks.
 
 I'm currently iterating over defines for `MALLOC_STATS` to see what
 code gets compiled in.  not going into details yet, just looking to
@@ -167,7 +167,6 @@ those stats are always grabbed if `malloc` is compiled with
 `MALLOC_STATS`. It also shows how to go from the stored `f` address to
 a line of code in `gdb`. `malloc` options are documented in
 {MAN}/malloc.conf.5[`malloc.conf(5)`].
-
 
 For now, let's go over the available `malloc` options and set a goal
 to learn what is the default and how the options are read/parsed,
@@ -193,8 +192,8 @@ Worth to check how it the code behaves when the file is present or
 not, the doc makes me think it will never dump unless the file is
 pre-created.  `F` is the freeguard for delayed frees.
 
-[NOTE] It won't dump unless the file is there and it will warn you
-       about that on stderr.
+NOTE: It won't dump unless the file is there and it will warn you
+      about that on stderr.
 
 Looks like `PROT_*` does detect double free and the code suggests that
 with using `U` with `F`. This option is intended for debugging rather
@@ -203,19 +202,19 @@ than improved security (use the `U` option for security). On `U`
 allocations. Unused pages on the freelist are read and write protected
 to cause a segmentation fault upon access.
 
-[NOTE] Use after free isn't quite the same as double free, but I think
-       double frees of these pages may still be captured. I assume
-       they would be removed from the hash table.  And re-inserted if
-       they once they are put back to use.
+TIP: Use after free isn't quite the same as double free, but I think
+     double frees of these pages may still be captured. I assume they
+     would be removed from the hash table.  And re-inserted if they
+     once they are put back to use.
 
 `X` is also interesting, mostly because it shows up with an example on
 how to compile in `malloc` options to binaries which makes me wonder
 what happens if a program does runtime modifications to that
 structure.
 
-[NOTE] This structure is never touched past first `malloc`. It's
-       useless to modify it and would be a vulnerability vector if it
-       had impact.
+NOTE: This structure is never touched past first `malloc`. It's
+      useless to modify it and would be a vulnerability vector if it
+      had impact.
 
 There are also two options for controlling the cache size. We also
 learn that the default page cache is 64.
@@ -234,9 +233,9 @@ Creates a root owned symbolic link from the string? 'G<<' to a file
 named `/etc/malloc.conf`. I predict that it follows the symlink to
 find the linked to 'filename' and treat that as options.
 
-[NOTE] `G<<` need to be a valid name (anything goes except nul or
-        `/`). But it obviously need not point to any existing file as
-        in doesn't have to exist.
+IMPORTANT: `G<<` need to be a valid name (anything goes except nul or
+           `/`). But it obviously need not point to any existing file
+           as in doesn't have to exist.
 
 Let's look at some code. Upon the first call to the `malloc(3)` family
 of functions, an initialization sequence inspects the symbolic link
@@ -267,26 +266,15 @@ This follows the symlink placing the name of our 'fake' options file
 in the buffer b.  Second path is only allowed if we are running
 elevated, the code then reads the `MALLOC_OPTIONS` environment variable.
 
-[NOTE] The environment variable is only respected if we are *not*
-       `setuid`/`setgid`.
-
-______________________________________________________________________
-
---> DuClare: am I reading this correctly that this is only true if the
-    executable was called with doas, has suid bit or was called by
-    root?
---> ah
---> issetugid returns 1 if the process was suid
---> right, thanks for catching
---> DuClare: any ideas why that restriction?
-______________________________________________________________________
-
-[NOTE] It's dangerous in general to respect environment variables set
-       by a less privileged user.  I don't know if it's a big deal in
-       this case.  But I guess the sysadmin could want all the
-       security improving options on any process that starts at root
-       and you don't want to let random users override that option
-       with an environment variable.
+IMPORTANT: The environment variable is only respected if we are *not*
+           `setuid`/`setgid`. `issetugid` return 1 if the process was
+           suid. It's dangerous in general to respect environment
+           variables set by a less privileged user.  I don't know if
+           it's a big deal in this case.  But I guess the sysadmin
+           could want all the security improving options on any
+           process that starts at root and you don't want to let
+           random users override that option with an environment
+           variable.
 
 Final path, is grabbing the potentially compiled in `malloc_options` and
 finally parsing it.  There are 2 distinct paths for `S` and `s`:
@@ -310,49 +298,26 @@ malloc.conf < MALLOC_OPTIONS < malloc_options
 So if a program compiles `malloc_options` then there is no external way
 to change it's flags and some programs utilize that feature.
 
-[NOTE] what would be the need of re-setting the malloc-cache in `s`?
-       For a bit of hardening, I guess. If you have `S`, it disables
-       the cache.  But someone wants to override that with `s` in the
-       environment, what do you do? Line614
+NOTE: what would be the need of re-setting the malloc-cache in `s`?
+      For a bit of hardening, I guess. If you have `S`, it disables
+      the cache.  But someone wants to override that with `s` in the
+      environment, what do you do? Line614
 
-{BXR}/lib/libc/stdlib/malloc.c#omalloc_parseopt[`parseopt`]
-cache sizes first, handled with bitshifts of malloc_cache
-then pretty much boolean yes/no flags depending on the character,
-and finally a stderr warning for unkown options.
-
-
-______________________________________________________________________
-
---> no what are the defaults.
---> which was the goal we set on ourselfs
-22:27 < DuClare> See `omalloc_init`
-22:27 < DuClare> Already been there :)
---> so nothing apart junking and default cache?
---> hmm
-______________________________________________________________________
-
+{BXR}/lib/libc/stdlib/malloc.c#omalloc_parseopt[`parseopt`] cache
+sizes first, handled with bitshifts of malloc_cache then pretty much
+boolean yes/no flags depending on the character, and finally a stderr
+warning for unkown options and randomly enabled canary.
 
 [c]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
      while ((mopts.malloc_canary = arc4random()) == 0)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-______________________________________________________________________
+NOTE: That's less of an option, you can't even set it. It's just
+      stored there, automatically.  It's not controlled by any
+      flag. `mopts` stores other internal use data too.
 
---> and randomly enabled canary
-22:29 < DuClare> That's less of an option
---> yeah it overwrites what you may pass
-22:30 < DuClare> I mean you can't even set it
-22:30 < DuClare> It's just stored there, automatically.
-22:30 < DuClare> It's not controlled by any flag.
---> ah it's different to `C`
---> which is the Chunk canarry
---> so this one would be the page canary?
-22:31 < DuClare> mopts stores other internal use data too
---> well, we got our defaults
-______________________________________________________________________
-
-[NOTE] The `dir_info` is protected by these canaries, mopts is
-       read-only so an attacker can't mess with the stored canary. If
-       they somehow managed to mess with `dir_info`, they'd have to know
-       the canaries and write them in the right spots.
+The `dir_info` is protected by these canaries, `mopts` is read-only so
+an attacker can't mess with the stored canary. If they somehow managed
+to mess with `dir_info`, they'd have to know the canaries and write
+them in the right spots.
