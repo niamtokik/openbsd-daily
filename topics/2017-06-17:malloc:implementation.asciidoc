@@ -101,11 +101,11 @@ they can get unmapped. The search for a cached region is randomized
 Optionally pages are marked `PROT_NONE` which means the pages can't
 be executed, read or written to.
 
-[NOTE] That's great for catching use-after-free bugs. You can enable
-       this with malloc options. Would that also catch double free?
-       Yes. The optional option `F` turns off delayed freeing. So that
-       makes it easier to catch double frees I don't think the
-       mprotect plays a role in this case.
+NOTE: That's great for catching use-after-free bugs. You can enable
+      this with malloc options. Would that also catch double free?
+      Yes. The optional option `F` turns off delayed freeing. So that
+      makes it easier to catch double frees I don't think the mprotect
+      plays a role in this case.
 
 The {MAN}/free[`free(3)`] function causes the space pointed to by
 pointer to be either placed on a list of free blocks to make it
@@ -115,9 +115,9 @@ action occurs. If pointer was previously freed by
 {MAN}/free[`free(3)`] or a reallocation function, the behavior is
 undefined and the double free is a security concern.
 
-[NOTE] C arguments are always passed by value and it can't modify the
-       pointer you pass to it. But a `free` would cause the pointer to
-       be erased from the hash table mentioned earlier.
+NOTE: C arguments are always passed by value and it can't modify the
+      pointer you pass to it. But a `free` would cause the pointer to
+      be erased from the hash table mentioned earlier.
 
 When the pointer isn't found in the hash table, free return an error
 and this behavior can be see in
