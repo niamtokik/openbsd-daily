@@ -89,9 +89,9 @@ outdated but worth to go over it).
 
 There's apparently a hash table used that tracks mmap'ed regions using
 their addresses as keys.  The existing data structure for chunk
-allocations probably refers to the page dir? Not sure at this point.
-
-There's also a cache for free regions. Slide 13 presents a nice graph for the metadata
+allocations probably refers to the page dir? Not sure at this
+point. There's also a cache for free regions. Slide 13 presents a nice
+graph for the metadata.
 
 Slide 14, we see a struct for region_info and a hashing function.  The
 backing hash table is grown if it crosses the 75% capacity water mark.
@@ -197,114 +197,146 @@ to cause a segmentation fault upon access.
        they would be removed from the hash table.  And re-inserted if
        they once they are put back to use.
 
---> X is also interesting, mostly because it shows up with an example on how to compile in malloc options to binaries
---> which makes me wonder what happens if a program does runtime modifications to that structure
---> I assume it's never touched past first malloc
-21:56 < DuClare> Yeah it's useless to modify it after the fact
---> it would be a vulnerability vector if it had impact
---> there are also two options for controlling the cache size
---> we also learn that the default page cahce is 64
---> wonder if that is still true
-21:57 < DuClare> Yep
---> #define MALLOC_DEFAULT_CACHE    64
---> yep
---> and the example
---> # ln -s 'G<<' /etc/malloc.conf
---> creates a root owned symbolic link from the string? 'G<<' to a file named /etc/malloc.conf
---> I assume that still need to be a valid file name
-21:59 < DuClare> 'G<<' need not be a valid name
---> and I predict that it follows the symlink to find the linked to 'filename'
---> and treat that as options
-22:00 < DuClare> I mean yes, of course it's a valid name.  Anything goes except nul or /
---> yeah that's what I meant
-22:00 < DuClare> But it obviously need not point to any existing file.  :)
---> as in doesn't have to exist :)
---> yep
---> ok, let's look at some code
---> Upon the first call to the malloc(3) family of functions, an initialization sequence inspects the symbolic link /etc/malloc.conf
---> this is mentioned as the first thing the code does
---> so let's search for /etc/malloc.conf
---> http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#590
---> we are in omalloc_init
---> we can see cache being set to 64
---> and an option junk set to 1
---> junk is:
---> "More junking". Increase the junk level by one if it is smaller than 2.
---> Junking writes some junk bytes into the area allocated. Currently junk is bytes of 0xdb when allocating; freed chunks are filled with 0xdf. By default the junk level is 1: small chunks are always junked and the first part of pages is junked after free. After a delay (if not switched off by the F option), the filling pattern is validated and the process is aborted if the pattern was modified. If 
---> the junk level is zero, no junking is performed. For junk level 2, junking is done without size restrictions.
---> now we have a chunk of code executed up to 3 times
---> interesting pattern I never saw before
---> the loop switches on the value picking a patch
---> on the first try we call readlink on /etc/malloc.conf
---> http://man.openbsd.org/readlink
---> *wrong
---> http://man.openbsd.org/readlink.2
---> so this follows the symlink placing the name of our 'fake' options file
---> in the buffer b
---> second path is only allowed if we are running elevated
---> the code then reads the MALLOC_OPTIONS environment variables
---> *variable
-22:10 < DuClare> Clarification, it's the environment variable is only respected if we are *not* setuid/setgid
---> DuClare: am I reading this correctly that this is only true if the executable was called with doas, has suid bit or was called by root?
+`X` is also interesting, mostly because it shows up with an example on
+how to compile in malloc options to binaries which makes me wonder
+what happens if a program does runtime modifications to that
+structure.
+
+[NOTE] This structure is never touched past first malloc. It's useless
+       to modify andit would be a vulnerability vector if it had
+       impact.
+
+There are also two options for controlling the cache size.
+We also learn that the default page cache is 64.
+
+[c]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#define MALLOC_DEFAULT_CACHE    64
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+[sh]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ln -s 'G<<' /etc/malloc.conf
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Creates a root owned symbolic link from the string? 'G<<' to a file
+named `/etc/malloc.conf`. I predict that it follows the symlink to
+find the linked to 'filename' and treat that as options.
+
+[NOTE] `G<<` need to be a valid name.  Anything goes except nul or
+        `/`. But it obviously need not point to any existing file as
+        in doesn't have to exist.
+
+
+Let's look at some code. Upon the first call to the malloc(3) family
+of functions, an initialization sequence inspects the symbolic link
+`/etc/malloc.conf`. This is mentioned as the first thing the code
+does, so let's search for
+http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#590[`/etc/malloc.conf`].
+
+We are in `omalloc_init`, we can see cache being set to 64 with and
+option junk set to 1. Junk option increase the junk level by one if it
+is smaller than 2.
+
+Junking writes some junk bytes into the area allocated. Currently junk
+is bytes of `0xdb` when allocating; freed chunks are filled with
+`0xdf`. By default the junk level is `1`: small chunks are always
+junked and the first part of pages is junked after free. After a delay
+(if not switched off by the F` `option), the 😶filling pattern is
+validated and the process is aborted if the pattern was modified. If
+the junk level is `0` (zero), no junking is performed. For junk level
+`2`, junking is done without size restrictions.
+
+Now we have a chunk of code executed up to 3 times.  Interesting
+pattern I never saw before, the loop switches on the value picking a
+patch.  On the first try we call
+http://man.openbsd.org/readlink.2[`readlink(2)`] on `/etc/malloc.conf`.
+
+This follows the symlink placing the name of our 'fake' options file
+in the buffer b.  Second path is only allowed if we are running
+elevated, the code then reads the MALLOC_OPTIONS environment variable.
+
+[NOTE] The environment variable is only respected if we are *not*
+       setuid/setgid.
+
+______________________________________________________________________
+
+--> DuClare: am I reading this correctly that this is only true if the
+    executable was called with doas, has suid bit or was called by
+    root?
 --> ah
 --> issetugid returns 1 if the process was suid
 --> right, thanks for catching
 --> DuClare: any ideas why that restriction?
-22:13 < DuClare> It's dangerous in general to respect environment variables set by a less privileged user
-22:14 < DuClare> I don't know if it's a big deal in this case.  But I guess the sysadmin could want all the security improving options on any process that starts at root
-22:14 < DuClare> And you don't want to let random users override that option with an environment variable
---> right
---> I expected the restriction to be the other way around - why would a non administrator be able to look into the internals of the memory allocator
---> final path, is grabbing the potentially compiled in malloc_options
---> and finally parsing it
---> there are 2 distinct paths for S and s
---> S - Enable all options suitable for security auditing.
---> lower case version means turning it off
---> first branch when spotting 'S' calls omalloc-parseopt with CGJ
---> so canaries, guard pages and junking
---> second one disables all 3
---> and the final code path handles everything on malloc options that is not s or S
---> it's interesting htat s also sets default cache
---> also, there's one thing that I am noticing right now
---> there's a hierarchy
---> malloc.conf < MALLOC_OPTIONS < malloc_options
-22:22 < DuClare> That's right.
---> so if a program compiles malloc_options then there is no external way to change it's flags
-22:23 < DuClare> Right
-22:23 < DuClare> And some programs utilize that
---> what would be the need of re-setting the malloc-cache in 's'?
-22:23 < DuClare> For a bit of hardening, I guess.
---> I didn't see a requirement on order
-22:24 < DuClare> mulander: Well if you have S, it disables the cache.  But someone wants to override that with s in the environment, what do you do?
---> ah, right - blind and didn't notice the disable on line 614
---> ok off to parseopt
---> http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#omalloc_parseopt
---> cache sizes first, handled with bitshifts of malloc_cache
---> then pretty much boolean yes/no flags depending on the character
---> and finally a stderr warning for unkown options
+______________________________________________________________________
+
+[NOTE] It's dangerous in general to respect environment variables set
+       by a less privileged user.  I don't know if it's a big deal in
+       this case.  But I guess the sysadmin could want all the
+       security improving options on any process that starts at root
+       and you don't want to let random users override that option
+       with an environment variable.
+
+
+Final path, is grabbing the potentially compiled in malloc_options and
+finally parsing it.  There are 2 distinct paths for `S` and `s`:
+
+ * `S` -> Enable all options suitable for security auditing;
+ * `s` -> lower case version means turning it off.
+ 
+First branch when spotting `S` calls omalloc-parseopt with CGJ.  So
+canaries, guard pages and junking.
+
+Second one disables all 3.  The final code path handles everything on
+malloc options that is not `s` or `S`.  It's interesting that s also
+sets default cache.  There's one thing that I am noticing right
+now. There's a hierarchy:
+
+[txt]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+malloc.conf < MALLOC_OPTIONS < malloc_options
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+So if a program compiles malloc_options then there is no external way
+to change it's flags and some programs utilize that feature.
+
+[NOTE] what would be the need of re-setting the malloc-cache in 's'?
+       For a bit of hardening, I guess. If you have `S`, it disables
+       the cache.  But someone wants to override that with `s` in the
+       environment, what do you do? Line614
+
+{BXR}/lib/libc/stdlib/malloc.c#omalloc_parseopt[`parseopt`]
+cache sizes first, handled with bitshifts of malloc_cache
+then pretty much boolean yes/no flags depending on the character,
+and finally a stderr warning for unkown options.
 --> no what are the defaults.
 --> which was the goal we set on ourselfs
-22:27 < DuClare> See omalloc_init
+22:27 < DuClare> See `omalloc_init`
 22:27 < DuClare> Already been there :)
 --> so nothing apart junking and default cache?
 --> hmm
--->     while ((mopts.malloc_canary = arc4random()) == 0)
+
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     while ((mopts.malloc_canary = arc4random()) == 0)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+______________________________________________________________________
+
 --> and randomly enabled canary
 22:29 < DuClare> That's less of an option
 --> yeah it overwrites what you may pass
 22:30 < DuClare> I mean you can't even set it
 22:30 < DuClare> It's just stored there, automatically.
 22:30 < DuClare> It's not controlled by any flag.
---> ah it's different to 'C'
+--> ah it's different to `C`
 --> which is the Chunk canarry
-22:30 < DuClare> Right
 --> so this one would be the page canary?
 22:31 < DuClare> mopts stores other internal use data too
 --> well, we got our defaults
---> and already two hours in so let's call this a day
-22:32 < DuClare> The dir_info is protected by these canaries
-22:32 < DuClare> mopts is read-only so an attacker can't mess with the stored canary
-22:33 < DuClare> If they somehow managed to mess with dir_info, they'd have to know the canaries and write them in the right spots
---> thanks
---> ok, let's wrap up, we will continue with malloc tomorrow
---> --- DONE ---
+______________________________________________________________________
+
+
+[NOTE] The `dir_info` is protected by these canaries, mopts is
+       read-only so an attacker can't mess with the stored canary. If
+       they somehow managed to mess with dir_info, they'd have to know
+       the canaries and write them in the right spots.
