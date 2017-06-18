@@ -91,88 +91,112 @@ There's apparently a hash table used that tracks mmap'ed regions using
 their addresses as keys.  The existing data structure for chunk
 allocations probably refers to the page dir? Not sure at this point.
 
---> there's also a cache for free regions
---> slide 13 presents a nice graph
---> for the metadata
---> slide 14, we see a struct for region_info and a hashing function
---> the backing hash table is grown if it crosses the 75% capacity water mark
---> the cache, freed regions are kept for potential reuse, large regions are unmapped directly.
---> if the number of cached pages grows they can get unmapped
---> the search for a cached region is randomized
---> optionally pages are marked PROT_NONE
---> which means the pages can't be: executed, read or written to.
-21:14 < DuClare> And that's great for catching use-after-free bugs.
-21:14 < DuClare> You can enable this with malloc options
---> would that also catch double free?
-21:15 < DuClare> Yea
-21:16 < DuClare> Well the optional option, F
-21:16 < DuClare> It turns off delayed freeing
-21:16 < DuClare> So that makes it easier to catch double frees
-21:16 < DuClare> I don't think the mprotect plays a role
---> The free() function causes the space pointed to by ptr to be either placed on a list of free blocks to make it available for future allocation or, when appropriate, to be returned to the kernel using munmap(2). If ptr is NULL, no action occurs. If ptr was previously freed by free() or a reallocation function, the behavior is undefined and the double free is a security concern.
---> I actually wonder if free alters the pointer in some way or keeps it at the same memory spot
-21:17 < DuClare> What pointer?  It can't modify the pointer you pass to it
-21:17 < DuClare> C arguments are always passed by value
-21:18 < DuClare> But a free would cause the pointer to be erased from the hash table mentioned earlier
---> http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#1331
-21:20 < DuClare> Right.  That's what happens when the pointer isn't found in the hash table.
---> going on with the dog
---> realloc attempts to avoid mmap'ing more memory from the kernel by checking if the required pages are already existing
---> the dir_info hash is mmap'ed with PROT_READ (read only) and there's an option to do the same for the page directory
---> dir_info and chunk_info is also protected by canaries
---> and we learn this malloc first appeared in 4.4
---> that's it for the pdf
---> doing a quick scan thorugh the site itself
---> we learn that malloc can grab instrumentation data if built with MALLOC_STATS defined
---> http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#26 not compiled in by default
---> http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#106 with that option malloc additionally tracks the source of the allocation
-21:28 < DuClare> Remember this was introduced in a time before the valgrind port for OpenBSD (I still don't know how well it works, never tried it?)
-21:29 < DuClare> So that's one way to look out for and track memory leaks.
---> I'm currently iterating over defines for MALLOC_STATS
---> to see what code gets compiled in
---> not going into details yet, just looking to get a feel for it
---> the largest chunk indeed is for leak tracking
---> so that could be a nice feature oriented read (how the tracking works)
---> so the document shows us actually how the feature is used
---> we have a leaky x.c program
---> that allocates 10240 bytes 3 times, then calls free just on the last alloction and finally allocates 1000 bytes again
---> there's a way to grab the instrumentation data via gdb
---> even if the program itself is not running with malloc opts that allow grabbing this data
---> so I assume the option only causes a dump, and those stats are always grabbed if malloc is compiled with MALLOC_STATS
-21:42 < DuClare> Right
---> and it also shows how to go from the stored f address to a line of code in gdb
---> malloc options are documented in malloc.conf(5) http://man.openbsd.org/malloc.conf.5
---> this already will be a multi day read, so let's do some initial planning
---> for now, let's go over the available malloc options and set a goal to learn what is the default and how the options are read/parsed
---> including the implementation details
---> (as the symbolic link in examples seems interesting)
-21:46 < DuClare> It's a fun trick
---> and the initial goal for tomorrow will be going over the stats code
---> ok so from malloc.conf we learn
---> Upon the first call to the malloc(3) family of functions, an initialization sequence inspects the symbolic link /etc/malloc.conf, next checks the environment for a variable called MALLOC_OPTIONS, and finally looks at the global variable malloc_options in the program. Each is scanned for the following flags. Flags are single letters. Unless otherwise noted uppercase means on, lowercase means off.
---> I assume 'first call' is per program
---> I checked on my boxes and none have malloc.conf by default
---> obviously none also define MALLOC_OPTIONS
---> as for the flag itself
---> the man page goes over them pretty clearly, so no point of me copy pasting info here
---> one interesting bit so far
---> on 'D' - "Dump". malloc(3) will dump statistics to the file ./malloc.out, if it already exists, at exit.
---> worth to check how it the code behaves when the file is present or not
---> the doc makes me think it will never dump unless the file is pre-created
---> F is the freeguard DuClare mentioned for delayed frees
-21:52 < DuClare> You're right, it won't dump unless the file is there
-21:52 < DuClare> It will warn you about that on stderr.
---> regarding our previous discussion
---> looks like PROT_* does detect double free and the code suggests that with using U
---> with F - This option is intended for debugging rather than improved security (use the U option for security).
---> on U
---> "Free unmap". Enable use after free protection for larger allocations. Unused pages on the freelist are read and write protected to cause a segmentation fault upon access.
-21:53 < DuClare> Use after free isn't quite the same as double free
---> ah upon access, you are correct
-21:53 < DuClare> But I think double frees of these pages may still be captured
---> something we might investigate later I guess :)
-21:54 < DuClare> Yes, I can't remember how it works.   But I assume they would be removed from the hash table.
-21:54 < DuClare> And re-inserted if they once they are put back to use.
+There's also a cache for free regions. Slide 13 presents a nice graph for the metadata
+
+Slide 14, we see a struct for region_info and a hashing function.  The
+backing hash table is grown if it crosses the 75% capacity water mark.
+The cache, freed regions are kept for potential reuse, large regions
+are unmapped directly.  If the number of cached pages grows they can
+get unmapped. The search for a cached region is randomized
+
+Optionally pages are marked PROT_NONE which means the pages can't be:
+executed, read or written to.
+
+[NOTE] That's great for catching use-after-free bugs. You can enable
+       this with malloc options. Would that also catch double free?
+       Yes. The optional option `F` turns off delayed freeing. So that
+       makes it easier to catch double frees I don't think the
+       mprotect plays a role in this case.
+
+The free() function causes the space pointed to by ptr to be either
+placed on a list of free blocks to make it available for future
+allocation or, when appropriate, to be returned to the kernel using
+munmap(2). If ptr is NULL, no action occurs. If ptr was previously
+freed by free() or a reallocation function, the behavior is undefined
+and the double free is a security concern.  I actually wonder if free
+alters the pointer in some way or keeps it at the same memory spot.
+
+[NOTE] C arguments are always passed by value and it can't modify the
+       pointer you pass to it. But a free would cause the pointer to
+       be erased from the hash table mentioned earlier.
+
+{BXR}/lib/libc/stdlib/malloc.c#1331. That's what happens when the
+pointer isn't found in the hash table.
+
+`realloc` attempts to avoid mmap'ing more memory from the kernel by
+checking if the required pages are already existing. The `dir_info`
+hash is mmap'ed with `PROT_READ` (read only) and there's an option to
+do the same for the page directory.  `dir_info` and `chunk_info` are
+also protected by canaries and we learn this `malloc` first appeared
+in BSD 4.4.  That's it for the pdf.
+
+Doing a quick scan though the site itself. We learn that malloc can
+grab instrumentation data if built with
+{BXR}lib/libc/stdlib/malloc.c#26[`MALLOC_STATS`] defined and not
+compiled in by default and with that option malloc additionally
+{BXR}/lib/libc/stdlib/malloc.c#106[tracks the source of the
+allocation].
+
+[NOTE] This was introduced in a time before the valgrind port for
+       OpenBSD (I still don't know how well it works, never tried
+       it?). So that's one way to look out for and track memory leaks.
+
+I'm currently iterating over defines for `MALLOC_STATS` to see what
+code gets compiled in.  not going into details yet, just looking to
+get a feel for it.  The largest chunk indeed is for leak tracking, so
+that could be a nice feature oriented read (how the tracking works)
+and the document shows us actually how the feature is used.
+
+We have a leaky x.c program, that allocates 10240 bytes 3 times, then
+calls free just on the last alloction and finally allocates 1000 bytes
+again
+
+There's a way to grab the instrumentation data via gdb, even if the
+program itself is not running with malloc opts that allow grabbing
+this data.  So I assume the option only causes a dump, and those stats
+are always grabbed if malloc is compiled with MALLOC_STATS. It also
+shows how to go from the stored f address to a line of code in
+gdb. malloc options are documented in
+{MAN}/malloc.conf.5[`malloc.conf(5)`].
+
+
+For now, let's go over the available malloc options and set a goal to
+learn what is the default and how the options are read/parsed,
+including the implementation details (as the symbolic link in examples
+seems interesting).
+
+So from malloc.conf we learn, upon the first call to the malloc(3)
+family of functions, an initialization sequence inspects the symbolic
+link /etc/malloc.conf, next checks the environment for a variable
+called MALLOC_OPTIONS, and finally looks at the global variable
+malloc_options in the program. Each is scanned for the following
+flags. Flags are single letters. Unless otherwise noted uppercase
+means on, lowercase means off.  I assume 'first call' is per program I
+checked on my boxes and none have malloc.conf by default.  Obviously
+none also define `MALLOC_OPTIONS` as for the flag itself.  The man
+page goes over them pretty clearly, so no point of me copy pasting
+info here.  One interesting bit so far, on `D` for "Dump". malloc(3)
+will dump statistics to the file ./malloc.out, if it already exists,
+at exit.  worth to check how it the code behaves when the file is
+present or not, the doc makes me think it will never dump unless the
+file is pre-created.  `F` is the freeguard DuClare mentioned for
+delayed frees.
+
+[NOTE] It won't dump unless the file is there and it will warn you
+       about that on stderr.
+
+Looks like `PROT_*` does detect double free and the code suggests that
+with using `U` with `F` - This option is intended for debugging rather
+than improved security (use the `U` option for security).  on `U`
+"Free unmap". Enable use after free protection for larger
+allocations. Unused pages on the freelist are read and write protected
+to cause a segmentation fault upon access.
+
+[NOTE] Use after free isn't quite the same as double free, but I think
+       double frees of these pages may still be captured. I assume
+       they would be removed from the hash table.  And re-inserted if
+       they once they are put back to use.
+
 --> X is also interesting, mostly because it shows up with an example on how to compile in malloc options to binaries
 --> which makes me wonder what happens if a program does runtime modifications to that structure
 --> I assume it's never touched past first malloc
