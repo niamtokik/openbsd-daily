@@ -512,3 +512,196 @@ or fill it with junk.  In the first branch, past delayed free handling
 we have the junk validation being executed, think that covers the free
 junk handling.
 
+== Memory junking allocation
+
+{BXR}/lib/libc/stdlib/malloc.c#90[`malloc.c (line 90)`].  `SOME_JUNK`
+`0xdb` is used as the pattern. Our first hit lands in malloc_bytes
+{BXR}/lib/libc/stdlib/malloc.c#952[`malloc.c (line 952)`] from the
+top, we start with the code checking the canary on `dir_info` and
+bailing execution if it's corrupt.  Tthen we attempt to find an
+already existing chunk of the requested size and create a new one if
+we fail to do so.
+
+Next we check the canary on the chunk itself, so `bp` is a page of
+chunks.  Bits contains information on which chunks are free, if
+there's more than one free chunk, we move our `chunk_start` forward by
+the amount of bytes already in use.  Having a hard time grokking what
+the bitwise and of total -1 is intended to do
+
+______________________________________________________________________
+
+NOTE: are those chunks just a bitmask?
+21:54 < DuClare> You mean this one?  i &= bp->total - 1;
+21:54 < DuClare> Or another one?
+-->  generally the operations on i here
+21:56 < DuClare> Well i is clearly used as an index into the bitmap
+-->  I think it tries to find the first free spt in the chunk
+22:00 < DuClare> Yes.  Or "first" -- notice the random nudge before the nested loops
+-->  and the for loop inspects each checking on the bits mask to see if they are taken
+-->  can you point the random nudge? my bit fiddling foo is weak
+22:02 < DuClare> if (bp->free > 1)
+-->  or can't see the forest for the trees to be more precise without a pen & paper
+22:02 < DuClare>                 i += getrbyte(d);
+-->  yes, that one calls init with the arc4random
+-->  when you said between the loops I assumed between for (;;) and for(;;)
+22:04 < DuClare> I said before the loops
+______________________________________________________________________
+
+We remove the page from the freelist if it has no more free chunks and
+we store the allocation size as the chunk canary. Then we get to our
+junking.
+
+If `J` was set, we junk the allocated chunk with `SOME_JUNK` without a
+size restriction.  Apparently `J` also excludes the use of chunk
+canaries.  Looking at `fill_canary` ,it also uses the `SOME_JUNK`
+pattern.  If the requested size is smaller than the allocated size and
+larger than CHUNK_CHECK_LENGTH (32 bytes), the canarie would be filled
+past the requested allocation to the end of the allocated space but
+those features only exclude themselves when full junking (`J`) is on.
+
+Jumping by `SOME_JUNK` I will also watch out, to not confuse canarie
+checking code with the alloc junking, we can skip fill_canary and
+validate_canary.
+
+Next call lands in
+http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#1133[`omalloc`].  So
+last we checked on amd64 MALLOC_MAXCHUNK I believe came out as 2k.  If
+the requested allocation is smaller than that, it goes to malloc_bytes
+and the comment states what we saw there , that it handles adding
+SOME_JUNK.  Otherwise, we go through the other branch.
+
+First malloc guard handling, then page rounding, then map which as we
+read before goes through the cache and does handle junking but only
+when it internally frees.  Same for unmap.  Again malloc guard
+handling, if the request matches the whole allocation with juning set
+to `J`, we junk the whole size minus the space needed for the malloc
+guard.  If called with zero fill, this would get overwritten (again
+leaving the malloc_guard untouched).
+
+Otherwise, if the requested allocation is smaller than the page size,
+we only junk the requested size minus the the malloc guard but if
+asked to zero memory first, we would zero out up to the requested
+allocation and junk the actual remainder of the allocated space.  If
+`J` was not passed we would go to the canary handling we saw before
+
+http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#1488[`orealloc`] defers
+to `omalloc` if called with a null pointer, then tries to find the
+page in the directory.  If the page is not found, it reports a double
+free.
+
+Next a memory sanity check, we obtain the allocation size of the existing memory.
+We prepare goldsz and gnewsz for malloc_guard size accounting
+
+[c]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/* First case: from n pages sized allocation to m pages sized
+allocation, m > n */
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Rounding is done using the sized that include the guard pages,
+obtaining memory from either cache and if that fails from the kernel.
+After we have our memory on the gotit label for `J` we junk the newly
+needed region then handle canaries. Apparently in this case `J`
+doesn't conflict with canary handling.
+
+In the next case, we effectively move the guard page down, marking the
+old one read + write available and the new as PROT_NONE.  There is no
+junking on this path.  As there is no place we could junk, the resize
+however will result in FREEJUNK from the unmap.
+
+Next junk the newly required region of the page, accounting to leave
+the malloc guard untouched and again we handle canaries.  This again
+is only done on `J`
+
+Next, the chunk didn't change but the size did, so just junk past
+previous needed size to the newly needed size
+
+[c]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/* create new allocation */
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+calls omalloc, we already went through how it adds junking.
+error catch path, so that's don for orealloc.
+final use of SOME_JUNK.
+
+After a page is aligned, with `J` and zero fill we junk past the
+requested size (which is probably already 0 filled) and avaioid
+junking the malloc_guard.  If without zero fill, we junk the whole
+page but without touching the malloc_guard , otherwise we again see
+the canary handling.
+
+So in summary, by default (junking == 1), allocations smaller than
+MALLOC_MAXCHUNK will be junked on alloc. for junking == 2 we have no
+size restrictions and junking is done far more often, including
+reallocs and memaling.  The docs state:
+
+[txt]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+After a delay (if not switched off by the F option), the filling
+pattern is validated and the process is aborted if the pattern was
+modified.'
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+That appears to be true only for FREEJUNK as we didn't see any code
+validating allocation junks.
+
+NOTE: It detects the memory was touched, after being freed before
+      being discarded (use-after-free). By contrast, overwriting the
+      other junk is normal use
+
+
+{BXR}/lib/libc/stdlib/malloc.c#976[`malloc.c`] So, first of all there
+are different pages chunked at a different chunk size.  Minimum size
+is 16, so on amd64 you'd get 256 chunks in a page.  So find_chunksize
+is used to find the appropriate chunk size for the requested
+allocation (smallest size that is large enough).  There can be
+multiple chunked pages, we select one of the right size randomly.  Or
+make a new page if we've run out Canary check we already saw Each
+chunk info contains an array of bits, one for each chunk, indicating
+whether it is free We grab an index to start from dir_info.  Notice
+that this is shared across all chunk allocations, so making one such
+allocation effectively permutes the order in which we search for a
+chunk the next time Then if the page contains more than one free
+chunk, we add a random byte-sized offset to the index to confuse
+things further.
+
+There is obviously no point in doing that if there is only one chunk
+because we will find that one chunk anyway.  `bp->total` tells the
+total number of chunks in the page, and it's a power of two.  So `i &=
+bp->total - 1` reduces `i` modulo `bp->total`, to ensure we stay
+within the valid range.  The bitfield is stored in an array so the
+inner loop finds the element that i indexes into in that array, and
+checks if any of the bits in that element are set.  If none are set,
+we need to move forward so.  Each array element contains MALLOC_BITS
+bits so by adding that quantity to i, it will index into the next
+element.
+
+MALLOC_BITS is obviously a power of two so masking i with
+~(MALLOC_BITS - 1) clears the low bits of i, meaning it will index
+into the first bit in the given array element.  This is important as
+we'll see that the outer loop walks through the indices
+sequentially. Doing this, the inner loop will eventually find and
+break with an array element with some bits set, and unless it was the
+first element, i will index into the first bit.  There's also the
+obvious check that we do not run past the end of the bitfield
+(bp->total bits), if we do, we'll loop to the start.
+
+So now we come to the outer loop, with i indexing into some element
+with at least one bit set, we use the modulo operator to clear the
+high bits of i so we can focus on the 16 bits contained within the
+element we've got we have now an index k into one of these 16 bits,
+and we turn that into a corresponding bit mask u = 1 << k and with
+that, we test if the bit in the bitfield is set, and if so, break,
+because we found the free chunk.  Otherwise we increment i; it will
+either index into the next bit in the same element (in which case the
+inner loop break right away and we test that next bit, and so on).
+
+Or it will index into the first bit of the next element. This whole
+procedure is just a sequential search through the bit array, starting
+at the index we drew from the dir_info.  After we located the free
+chunk, we update the offset in dir_info to effectively permute the
+next small malloc. Then using xor clear the bit to signify that our
+chunk is no longer free: `*lp ^= u;`.
+
+
