@@ -704,4 +704,174 @@ chunk, we update the offset in dir_info to effectively permute the
 next small malloc. Then using xor clear the bit to signify that our
 chunk is no longer free: `*lp ^= u;`.
 
+== How `G` option handling guard pages
+
+On last malloc reads we went through `j` and `J` that hundle junking
+the memory on allocation and frees (depending on the level).  Going
+through that code path we saw code handling guard pages.
+
+-->  recap of materials:
+-->  http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c
+-->  http://man.openbsd.org/malloc
+-->  http://man.openbsd.org/malloc.conf.5
+-->  ok, the 'G' and 'g' options are parsed as values to mopts.malloc_guard
+-->  by default the value is unset in code, but since mopts is global it will be set to 0
+-->  when parsed the options either explicitly set malloc_guard to 0 (disable with 'g')
+-->  or set the value to MALLOC_PAGESIZE
+-->  http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#534
+-->  #define MALLOC_PAGESIZE     (1UL << MALLOC_PAGESHIFT)
+-->  we know that malloc_pageshift is platform dependant and for our amd64 example it's defined as 12
+-->  so so our MALLOC_PAGESIZE for amd64 is 4096 bytes
+-->  and that's the value (on amd64) that is set to malloc_guard
+-->  now let's go over occurences of malloc_guard, from the top
+-->  http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#70
+-->  first we have a set of macros defined
+-->  for calculating sizes for moves
+-->  malloc_guard size is just accounted for in those
+-->  next occurrence is found on line 142 inside MALLOC_STATS not compiled in by default
+-->  and as the comment states, used to track how many bytes are actually spent on the malloc guards
+-->  next hit L190, the option defined in mopts
+-->  and first code hit in unmap
+-->  we wen't over that one before fully so we won't go through the whole flow again
+-->  http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#386
+-->  the hit is on L386
+-->  when unmap is called with the clear flag to zero out memory
+-->  we actually account for the malloc_guard - the requested area is zeroed and the guard is left untouched.
+-->  next two hits are option parsing, we went over those before
+-->  and then we hit omalloc
+-->  http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#1133
+-->  we know that maxchunk on our platform is 2048 bytes from our last reads
+-->  if the requested allocation is smaller than last chunk (the else branch) we have nothing of interest for us
+-->  as malloc_bytes has no malloc_guard handling code
+-->  if the requested allocation is larger than 2048 bytes
+-->  first check makes sure the requested memory is a sane vvalue
+-->  accounting for the malloc guard and the page size
+-->  if not, we bail with no memory
+-->  next, the requested size is increased by the size of the malloc_guard (4k)
+-->  and the size is rounded
+-->  we then call map to obtain the memory either from the OS or from our caches/freelist
+-->  we don't remember any guard page handling there
+-->  next we insert the newly allocated page into our directory
+-->  looking inside insert, thhat's our freelist.
+-->  if that operation fails we call unmap
+-->  and it does have code for malloc_guard so let's jump there briefly
+-->  http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#unmap
+-->  L386
+-->  ok that's what we covered above in this read
+-->  clear is the last flag for unmap
+-->  and we can see unmap being called with clear '0' here
+-->  so that code path iss not triggered
+-->  next block is explicitly for malloc_guard (back on L1155)
+-->  at this point we have a chunk of memory, we call mprotect on it passing the start of the malloc guard page (psz - mopts.malloc_guard) and setting PROT_NONE for the whole size of malloc_guard (4096 bytes)
+-->  this means that this page has no permissions (read, write, execute)
+-->  and attempting to do any of that on this part of memory would result in a crash
+-->  ie. if the allocation was a string, and we tried to write over it - we should crash
+-->  and since this is an option we can write a test program just to see that in action
+-->  but first let's go over the rest of the code
+-->  our junking code from yesterday with 'J'
+-->  just accounts to not touch our malloc guard
+-->  and now we know why, I overlooked that yesterday
+-->  if it tried to, we would crash in the allocator itself
+-->  as we just seet that page to PROT_NONE
+-->  same for 'J' and when called we clear
+-->  we just avoid touching the page in the allocator
+-->  the same can bee seen in the second branch
+-->  at least for the 'J' path and clearing
+-->  there's an additional one for chunk canaries
+-->  and that's the same thing, it avoids touching the guard page while writing the canary
+-->  that's all for this code path
+-->  now for ofree
+-->  http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#1306
+-->  we saw this code before and went over it
+-->  so I'm going to focus on the paths hitting malloc_guard
+-->  when freeing large allocations (>2048 bytes)
+-->  1354        } else if (sz - mopts.malloc_guard < argsz) {
+-->  1355            wrterror(pool, "recorded size %zu < %zu",
+-->  1356                sz - mopts.malloc_guard, argsz);
+-->  1357        }
+-->  so I just checked call sites for ofree
+-->  and looks like the recorded size is only passed from freezero
+-->  http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#1480
+-->  which is a fairly new addition on current
+-->  http://man.openbsd.org/freezero
+-->  Used for the allocation of memory holding sensitive data, the recallocarray() and freezero() functions guarantee that memory becoming unallocated is explicitly discarded, meaning pages of memory are disposed via munmap(2) and cached free objects are cleared with explicit_bzero(3).
+-->  freezero has the size of the freed structure
+-->  so that helps catching when the user asked to clear less memory than was actually recorded as used by that allocation
+-->  (accounting for the malloc_guard size as unused)
+-->  next there are 2 code paths
+-->  again no malloc_guard with the else branch handling smaller than 2048 byte allocations
+-->  in the > MALLOC_MAXCHUNK branch we first check canaries
+-->  and again we just avoid the canary from touching the malloc_guard
+-->  next hit in the dedicated mopts.malloc_guard if
+-->  there's a sanity check, as the 'sz' contains the size of the requested memory including the malloc_guard
+-->  if that size is less than the malloc_guard then this is an inconsistency
+-->  the check is then disabled if 'F' was defined
+-->  ah actually it's not a check
+-->  this removes the PROT_NONE from the malloc_guard
+-->  with 'F' we want to keep it, as 'F' is for detecting use after free so having the page still protected is more likely to crash on use after free
+-->  without that option there is no delayed freeing so this memory is no longer considered protected and we just 'pull out' the malloc guard from it
+-->  that's it for ofree
+-->  now orealloc
+-->  http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#1488
+-->  we also went over this one before
+-->  so focusing only on malloc_guard
+-->  first hit, size sanity check we saw before in omalloc
+-->  next, if we the old size is larger than 2048 bytes
+-->  and the old size is smaller than the malloc guard, then we have an inconsistency
+-->  as it had to have a malloc guard
+-->  next we do some account for hte malloc guard size when resizing
+-->  and our realloc cases
+-->  explicitly only runs when there is no malloc_guard so we skip this one
+-->  the old malloc_guard page region is marked as read|write and the new region is marked as PPROT_NONE
+-->  - /* number of pages remains the same */
+-->  just 'J' handling, making sure it doesn't touch the protected malloc_guard page
+-->  and that's all for orealloc
+-->  next orecallocarray
+-->  again a check for the recorded size, same as we saw with freezero
+-->  the old size can't be smaller than malloc_guard
+-->  next omemalign
+-->  http://bxr.su/s?refs=omemalign&project=OpenBSD
+-->  we went over the code for junking
+-->  there is a sanity size check first (for checking a request to more memory than we can give)
+-->  then accounting that the size needs to contain the malloc_guard
+-->  round it
+-->  and with malloc_guard enabled
+-->  protect the memory region with mprotect PROT_NONE
+-->  and then with junking and canaries just avoid touching the protected area
+-->  finall occurences are in malloc_dum1
+-->  *malloc_dump1
+-->  for stats reporting
+-->  and for malloc_exit
+-->  that's also stats reporting
+-->  that code is not compiled in by default
+-->  ok so that covers the whole thing
+-->  let's write a sample program that mallocs memory and writes past the allocation
+-->  run it without 'G'
+-->  then compile the program with malloc options 'G'
+-->  and re-test
+-->  we know that our allocation has to be larger than 2048 to have the guard page added
+22:10 < DuClare> For bonus points, experiment with the size to try and find the maximum number of bytes you can overrun due to alignment.
+-->  yeah
+-->  so without 'G'
+-->  I get killed on page boundaries
+-->  here's sample code without 'G'
+-->  https://junk.tintagel.pl/no-guard.c
+-->  and it's sample output
+-->  Writing byte 8190
+-->  Writing byte 8191
+-->  Writing byte 8192
+-->  Segmentation fault (core dumped) 
+-->  now compiling with the guard
+-->  I'm either doing it wrong
+22:22 < DuClare> I don't think you're doing it wrong.
+-->  I don't see a difference with "G"
+-->  https://junk.tintagel.pl/guard.c
+22:23 < DuClare> So the thing is, 'G' guarantees that you have a guard page with these large allocations
+-->  goes up to 8192 then segfaults
+22:23 < DuClare> Without g, it is possible that another allocation is back to back with your new allocation
+22:24 < DuClare> However it is likewise entirely possible that you just run off into unmapped space
+22:24 < DuClare> Which kills you just as a guard page would
+-->  and with 'G' there will always be something between me and another allocation
+
+
 
