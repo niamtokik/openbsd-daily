@@ -874,4 +874,155 @@ through that code path we saw code handling guard pages.
 -->  and with 'G' there will always be something between me and another allocation
 
 
+== Malloc `C` option implementation
 
+-->  reading file: http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c
+-->  version: /*  $OpenBSD: malloc.c,v 1.226 2017/06/19 03:06:26 dlg Exp $    */
+-->  man pages:
+-->   - https://man.openbsd.org/malloc
+-->   - https://man.openbsd.org/malloc.conf.5
+-->  the documentation for 'C' states:
+-->  "Canaries". Add canaries at the end of allocations in order to detect heap overflows. The canary's content is checked when free(3) is called. If it has been corrupted, the process is aborted.
+-->  so unlike guard pages this is not using mprotect
+-->  let's start with mapping 'C' to an option and determining the default.
+-->  'C' and 'c' alter the chunk_canaries flag on mopts
+-->  we know mopts is  global and chunk_canaries are not explicitly set
+-->  so the default is 0 (canaries off)
+-->  let's follow usage from the top
+-->  first the flag declaration, then the option parsing code
+-->  next we have code we didn't hit on our previous reads
+-->  http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#733
+-->  alloc_chunk_info
+-->  so this allocates the memory needed for the metadata holding the information about a page
+-->  this is internally used by malloc_bytes vie omalloc_make_chunks
+-->  first we calculate the size we need accounting for alignment
+-->  there is apparently a free list for chunk metadata, which is separate from the page free list
+-->  if there are no free chunk structures for reuse we ask the OS for memory to create one
+-->  the structure is initialy zeroed out fully
+-->  and on line 765 we see the chunk canary being set
+-->  p->canary = d->canary1;
+-->  it's unconditional
+-->  so I assume that's an internal structure integrity canary unrelated to 'C'
+-->  on line 745 we do have accounting for chunk canaries
+-->  http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#745
+-->  from our previous reads we determined page size to be 4096 bytes on amd64
+-->  count is determined at the start of the function based on the requested allocation size
+-->  738    if (bits == 0)
+-->  739        count = MALLOC_PAGESIZE / MALLOC_MINSIZE;
+-->  740    else
+-->  741        count = MALLOC_PAGESIZE >> bits;
+-->  minsize is 16
+-->  so for 0 bit allocations count would be 256
+-->  and our canarie is count * sizeof(u_short) which is 2 bytes on my amd64 machine
+-->  trying to understand what the right shift is achieving here
+-->  in the else branch
+-->  it's shifting the page ize by the amount of requested bytes
+-->  *bits
+-->  at this point I am not sure what it is actually accounting here for, this is dividing the pagesize by power of two times equal to the bits requested
+-->  but apart from this impacting how much memory is memset at the end I don't see an impact/reason yet
+-->  I will try to revisit this later in order to not stop us for too long
+21:51 < DuClare> It's the chunk size
+21:52 < DuClare> 2^bits
+21:52 < DuClare> So it just counts how many chunks fit in a page
+-->  ah
+-->  and with canaries enabled
+-->  it has to account for each page having a 2 byte canary?
+-->  s/page/chunk/
+-->  moving on
+21:54 < DuClare> Yep
+-->  DuClare: thanks
+-->  next hit malloc_bytes
+-->  we saw this code before, the first and second canary occurences are for internal structures 
+-->  http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#1016
+-->  is where we start to read
+-->  (as we read that code fully before)
+-->  with chunk_canaries on we store the size of our real allocation at the bits start for that chunk
+-->  I assume that information is needed so we don't overwrite the canary ourselves while doing various operations on the memory
+-->  like when reallocing
+-->  on line 1024 we have our canary filled
+-->  we remember from previous read that with 'J' on canaries don't work
+-->  I think I didn't see that documented, might be worth to check later
+-->  let's move on, fill_canary is the next function at line 1031
+-->  check_sz is the size difference between the space allocated and the size requested by the user
+-->  CHUNK_CHECK_LENGTH is defined as 32
+-->  so at most we write 32 bytes for our canary after the requested allocated size
+-->  next function is our canary validation at L1041 validate_canary
+-->  it does the same size restriction to limit it's work to up most 32 bytes
+-->  it then travels the memory byte by byte comparing if each byte matches SOME_JUNK
+-->  defined as 0xdb
+-->  this is the same one used for 'J' mallocs
+-->  next occurrence omalloc
+-->  we know malloc_bytes handles addng the cnaaries so the else branch is covered
+-->  if the allocation takes the whole page we don't add the canary
+-->  which seem like I may be misunderstanding what MALLOC_MOVE_COND does
+22:15  * mulander looks up the macro
+-->  76#define MALLOC_MOVE_COND(sz)    ((sz) - mopts.malloc_guard <        \
+-->  77                    MALLOC_PAGESIZE - MALLOC_LEEWAY)
+-->  so if the requested size is less than a pagesize
+-->  we don't add any canaries
+-->  next up ofree
+-->  I expect more here as docs said the validation happens here
+-->  as in upon free
+-->  we did go through that code before so scanning for canaries
+-->  first hit on 1337
+-->  is not checking a canary but retrieving the size we saw stored
+-->  in the bits flag before, that was the size of actual requested allocation not including the added canaries
+-->  at this point if the size changed we have a corruption or were asked to free more memory than we had (ie. via freezero)
+-->  for larger allocations 2k on amd64
+-->  we call our validate_canary that will check each byte being careful to not touch the guard page
+-->  and again a path for small allocations
+-->  stepping back
+-->  to sz <= MALLC_MAXCHUNK
+-->  that code path calls find_chunknum
+-->  and taking a look at find_chunknum reveals
+-->  http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#find_chunknum
+-->  that it also validates the canary
+-->  scratch that
+-->  last parameter tells it to sip the check
+-->  so it's validated on L1392
+-->  next up orealloc
+-->  http://bxr.su/OpenBSD/lib/libc/stdlib/malloc.c#1488
+-->  we also read this before
+-->  on line 1529 we find the chunk info but find_chunknum is called without being asked to validate the canary
+-->  next up
+-->  - /* try to extend existing region */
+22:30 < DuClare> 22:53 <@mulander> it has to account for each page having a 2 byte canary?
+-->  fills a new canary after the region is extended
+22:30 < DuClare> I'll note that those two bytes were used for the size, not the canary
+-->  right
+-->  DuClare: thanks, again :)
+-->  unlike with guard pages, we don't have to worry about unmapping/cleraing the canary when resizing in orealloc
+-->  but the new one has to be filled at a proper place
+-->  same for /* shrink number of pages */
+-->  and /* number of pages remains the same */
+-->  branches
+-->  one caveat is /* do not reallocate if new size fits good in existing chunk */
+-->  which stores the new size on the info page and fills the canary
+-->  next oreallocarray
+-->  in line 1757
+-->  only contains a sanity check on the recorded sizes as we saw before
+-->  the rest is handled via omalloc which handles the canaries itself
+-->  the find_chunknum call here also is instructed to  not to verify the canary
+-->  next omemalign
+-->  we saw this one also
+-->  as a final step it fills the canary
+-->  and last use case is malloc_exit
+-->  which is just stats output and not compiled in by default
+-->  now let's modify our example, to trigger a chunk canary
+-->  Writing byte 8191
+-->  $ echo $?
+-->  0
+-->  $ 
+-->  this is from no-canary.c
+-->  https://junk.tintagel.pl/no-canary.c
+-->  it has 'G' option compiled in
+-->  and the guard page doesn't catch that we overwrote the allocated memory
+-->  as we stopped before hitting a guard page
+-->  https://junk.tintagel.pl/canary.c
+-->  is the same code but with 'G' flag changed to 'C'
+-->  compiled and ran
+-->  Writing byte 8190
+-->  Writing byte 8191
+-->  canary(98940) in free(): chunk canary corrupted 0x90249cc0000 0x13e8@0x13e8
+-->  Abort trap (core dumped) 
+-->  detects that the canary was overwritten
