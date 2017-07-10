@@ -50,6 +50,7 @@ You can find original raw IRC logs here:
  * 2017-07-07: https://junk.tintagel.pl/openbsd-daily-tabled-1.txt by @mulander
  * 2017-07-08: https://junk.tintagel.pl/openbsd-daily-tabled-2.txt by @mulander
  * 2017-07-09: https://junk.tintagel.pl/openbsd-daily-pf-bgpd-dhcpd.txt by @mulander
+ * 2017-07-10: https://junk.tintagel.pl/openbsd-daily-dhcpd-1.txt by @mulander
 
 Copies of these logs are available on this repository in `origin` directory.
 
