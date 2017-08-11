@@ -1,0 +1,270 @@
+20:04 [Users #openbsd-daily]
+20:04 [@akfaew        ] [ bch         ] [ ebag         ] [ kittens  ] [ norakam  ] [ stateless     ] 
+20:04 [@brynet        ] [ benpicco    ] [ edlm10       ] [ kl3      ] [ oldlaptop] [ swankier      ] 
+20:04 [@dlg           ] [ biniar      ] [ electricto4d ] [ kpcyrd   ] [ owa      ] [ tarug0        ] 
+20:04 [@duncaen       ] [ BlackFrog   ] [ entelechy    ] [ kraucrow ] [ phy1729  ] [ taschenraeuber] 
+20:04 [@fcambus       ] [ bluewizard  ] [ erethon      ] [ kysse    ] [ poptart  ] [ tdjones       ] 
+20:04 [@mikeb         ] [ brianpc     ] [ fcbsd        ] [ lteo[m]  ] [ Putti    ] [ tdmackey      ] 
+20:04 [@mulander      ] [ brianritchie] [ filwishe1    ] [ lucias   ] [ qasa     ] [ Technaton     ] 
+20:04 [@qbit          ] [ bruflu      ] [ fuyuuri      ] [ mandarg  ] [ qbit[m]  ] [ thrym         ] 
+20:04 [@t_b           ] [ bsdtux      ] [ geetam       ] [ mattl    ] [ quinq    ] [ timclassic    ] 
+20:04 [ acgissues     ] [ cengizIO    ] [ ggg`         ] [ metadave ] [ rabbitear] [ TuxOtaku      ] 
+20:04 [ administraitor] [ corbyhaas   ] [ ghostyy      ] [ mfgmfg   ] [ radio2034] [ vbarros       ] 
+20:04 [ afics         ] [ coversine   ] [ gshrikant    ] [ monsieurp] [ rain1    ] [ veonik        ] 
+20:04 [ akkartik      ] [ davl        ] [ harrellc00per] [ MurphSlaw] [ rajak    ] [ vyvup         ] 
+20:04 [ albongo       ] [ deei        ] [ IcePic       ] [ nacci    ] [ rnelson  ] [ whyt          ] 
+20:04 [ antranigv     ] [ Dhole       ] [ imaginary    ] [ nacelle  ] [ S007     ] [ wilornel      ] 
+20:04 [ ar            ] [ dostoyesvky ] [ iomotoko     ] [ nailyk   ] [ sdafsd   ] [ wodim         ] 
+20:04 [ asie          ] [ Dowzee      ] [ jaypatelani  ] [ ned      ] [ selckin  ] [ WubTheCaptain ] 
+20:04 [ azend|vps     ] [ DrPete      ] [ jbernard     ] [ Nemo_bis ] [ skrzyp   ] [ xcko          ] 
+20:04 [ babasik122    ] [ dsp         ] [ jnu          ] [ Niamkik  ] [ smiles`  ] [ xor29ah       ] 
+20:04 [ bcd           ] [ DuClare     ] [ kAworu       ] [ noexcept_] [ Soft     ] [ zyklon        ] 
+20:04 -!- Irssi: #openbsd-daily: Total of 120 nicks [9 ops, 0 halfops, 0 voices, 111 normal]
+20:04 <@mulander> -- code read: pf ioctl --
+20:04 < vyvup> inside kernel or pfctl?
+20:04 <@mulander> *** goal: continue our code read for pf, overview on what ioctls are available and how they are implemented ***
+20:05 <@mulander> vyvup: in between with a tendency to look on kernel side
+20:05 < vyvup> k
+20:05 <@mulander> main file to go over today
+20:05 <@mulander> https://github.com/openbsd/src/blob/master/sys/net/pf_ioctl.c
+20:06 <@mulander> we know that pf is controlled from userland by calling ioctl(2) on the /dev/pf pseudo-device
+20:06 <@mulander> http://man.openbsd.org/pf - defines all available ioctl commands
+20:06 <@mulander> we won't be recreating that manual there, so please look stuff up when needed
+20:06 < vyvup> btw, is there a guideline when ioctls/device is used or a syscall for communication with the kernel?
+20:08 <@mulander> I don't know if there's an official rule/preference, there are however some caveats with ioctls
+20:08 <@mulander> since they operate on a device you would need a file descriptor to talk with the kernel
+20:09 <@mulander> in some cases you coud not be able to open those or be at a limit
+20:09 < vyvup> yeah like in the /dev/random case
+20:09 <@mulander> I also *assume* sysctls would be faster as one layer less
+20:10 <@mulander> note I'm very new to kernel developent, practically learning with all of you here :)
+20:10 <@mulander> you might want to read on sysctl(3) man page and ioctl(2)
+20:10 < vyvup> np, discussing it is already helpful
+20:13 <@mulander> ok let's go over the source
+20:13 <@mulander> standard includes
+20:14 <@mulander> for the first time we see some conditional includes
+20:14  * bsdtux waves hello everyone
+20:14 <@mulander> for INET6 and NPFSYNC
+20:15 <@mulander> I'm wondering where are those from (kernel config?) and what's the default
+20:15 <@mulander> so I will do a quick grep for those 2 values over the whole source
+20:15 < vyvup> aren't they set using the kernel config file?
+20:16 < vyvup> GENERIC config file -> config GENERIC -> headers and stuff defining these?
+20:19 <@mulander> I assume so, but checking
+20:21 <@mulander> I see a bunch of conf files defining the INET6 option
+20:21 <@mulander> but none defining NPFSYNC
+20:23 < BlackFrog> Shouldn't we make INET6 the default
+20:23 < BlackFrog> move away from ipv4
+20:24 <@mulander> inet6 is compiled in by default on the generic kernel
+20:25 < dsp> but it's goog that you can turn it off if you want. the other way around would be awkward for now with the majority of deployments being v4.
+20:25 < dsp> s/goog/good/
+20:26 <@mulander> can't quickly find where NPFSYNC is defined, let's move on to not stall on the headers
+20:26 <@mulander> next we have forward declarations, two structs to storepf rules
+20:27 <@mulander> a pf_trans_set struct
+20:27 <@mulander> a bunch of defines for a bitmask
+20:27 < dsp> interesting that it has a TAG_ID_MAX althgouh it uses the tailq
+20:27 < dsp> it could be a relic from a more static like array impl.
+20:28 < dsp> it is used in tagname2tag where the whole queue is traversed. tha max is fetched,incremented and compared to that TAG_ID_MAX
+20:29 <@mulander> perhaps more is unrealistic or performs badly, 50k is a lot of rules
+20:30 <@mulander> ah it's not even for rules but for tags
+20:30 < dsp> also since this tagname2tag function returns u16t it should be bounded by 65535 which is close enough
+20:30 <@mulander> a tag is like a variable
+20:30 <@mulander> tag string
+20:30 <@mulander> Packets matching this rule will be tagged with the specified string. The tag acts as an internal marker that can be used to identify these packets later on. This can be used, for example, to provide trust between interfaces and to determine if packets have been processed by translation rules. Tags are "sticky", meaning that the packet will be tagged even if the rule is not the last matching rule. 
+20:30 <@mulander> Further matching rules can replace the tag with a new one but will not remove a previously applied tag. A packet is only ever assigned one tag at a time. Tags take the same macros as labels (see above).
+20:30 <@mulander> ---
+20:31 <@mulander> so you can have a rule grabbing some traffic, name it and re-use it later
+20:31 <@mulander> I can't see anyone reasonably using 50k named tags in a pf conf
+20:31 <@mulander> https://github.com/openbsd/src/commit/1ffa893a1e66327e61bcedf0e975cdcdf09a7d33
+20:32 <@mulander> the limit was there from the start.
+20:32 < dsp> would be interesting in trying to exhaust tags it whith evil enough rules ;) but that's out of the scope of this chat i suppose ;)
+20:32 < dsp> thanks mulander. good point
+20:32 <@mulander> dsp: that would be a self attack :)
+20:32 <@mulander> the admin would have to generate a pf.conf file with that many tags and load it
+20:33 < dsp> fully agree on that ;)
+20:33 <@mulander> here's home work for you, check how parse.y in smtpctl handles tags
+20:33 <@mulander> it might also have a limit on the parsing side.
+20:34 < rain1> based on https://github.com/openbsd/src/blob/master/sys/net/pf_ioctl.c#L2550 it looks like what'll happen is it'll retun "EBUSY" if you have the rules filled up
+20:34 <@mulander> which is called in DIOCADDRULE
+20:35 <@mulander> ok but let's continue
+20:35 <@mulander> there's a WITH_PF_LOCK, a read write lock on the pf code
+20:36 <@mulander> this was added a week ago
+20:36 <@mulander> and is part of the ongoing work to rid the kernel lock from OpenBSD
+20:37 <@mulander> https://github.com/openbsd/src/commit/956659a2c9191e0927b4f56584d8209ea85115f5
+20:37 <@mulander> then we are at pf_attach
+20:38 <@mulander> pool-init comes from sys/kern/subr_pool.c
+20:38 -!- Irssi: Pasting 5 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+20:38 <@mulander>  * Initialize the given pool resource structure.
+20:38 <@mulander>  *
+20:38 <@mulander>  * We export this routine to allow other kernel parts to declare
+20:38 <@mulander>  * static pools that must be initialized before malloc() is available.
+20:39 <@mulander> line 49 of that file describes what this API is used for
+20:39 -!- Irssi: Pasting 9 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+20:39 <@mulander>  * Pool resource management utility.
+20:39 <@mulander>  *
+20:39 <@mulander>  * Memory is allocated in pages which are split into pieces according to
+20:39 <@mulander>  * the pool item size. Each page is kept on one of three lists in the
+20:39 <@mulander>  * pool structure: `pr_emptypages', `pr_fullpages' and `pr_partpages',
+20:39 <@mulander>  * for empty, full and partially-full pages respectively. The individual
+20:39 <@mulander>  * pool items are on a linked list headed by `ph_items' in each page
+20:39 <@mulander>  * header. The memory for building the page list is either taken from
+20:39 <@mulander>  * the allocated pages themselves (for small pool items) or taken from
+20:39 <@mulander>  * an internal pool of page headers (`phpool').
+20:41 <@mulander> we create pools for rules, states, queues etc.
+20:42 <@mulander> hfsc_initialize
+20:42 <@mulander> uses the API from sys/net/hfsc.c
+20:43 <@mulander> this is a hierarchical fair service curve
+20:43 <@mulander> I'm assuming used for traffic shaping
+20:44 <@mulander> pfr_initialize
+20:45 <@mulander> from pf_table.c for handling tables in pf
+20:45 <@mulander> pfi_initialize from pf_if.c for interface handling
+20:46 <@mulander> pf_osfp_initialize - for p0f os fingerprinting
+20:47 < dsp> mulander: sorry internet crapped out on me. no smptd parse.y doesn't seem to care about num of tags. thanks for making me look at yacc code after 10yrs.
+20:48 <@mulander> :D
+20:48 <@mulander> dsp: well, generte a pf file with >50k tags and see if pfctl segfaults or misbehaves in any way
+20:48 <@mulander> as it will get an EBUSY reply from the ioctl
+20:49 < dsp> guys sorry have to get back to real world. keep up the studying. will catch the  logs later. mulander will msg you later to see how that went. will try to get it later today.
+20:49 <@mulander> dsp: thanks for paticipating, and not afraid of yacc shaving
+20:49 < dsp> and i need to also create traffic that will match it i suppose ;) there is a rule optimised that we have to fool too.
+20:49 < dsp> s/optimised/optimiser/
+20:51 <@mulander> pool_sethardlimit - optionally limits the states pf uses
+20:52 <@duncaen> strlcpy(a->v.rtlabelname, "?", sizeof(a->v.rtlabelname));
+20:54 <@duncaen> not sure if its worth changing, but sometimes tag names are copied with strlcpy and the length as sizeof(tag->name) and sometimes PF_TAG_NAME_SIZE
+20:57 <@mulander> DuClare: well in your example rtlabelname is a RTLABEL_LEN char
+20:58 <@mulander> both are correct
+20:58 <@mulander> DuClare: sorry, wanted to highlight duncaen :)
+20:58 <@duncaen> different "issues", the strlcpy for one char is a bit useless
+20:59 <@mulander> it's consistent with the second branch and you don't need to remember on null termination though.
+21:00 <@duncaen> thats true
+21:00 <@mulander> I can't find what atop does and where it's defined.
+21:00 <@mulander> the only close thing I found was at libexec
+21:01 <@mulander> libexec/spamd-setup/spamd-setup.c
+21:01 <@mulander> but that doesn't seem to be it
+21:01 <@mulander> I'm talking about the check in L176
+21:01 < rain1> #define	atop(x) ((x) >> PAGE_SHIFT)
+21:01 < rain1> https://github.com/openbsd/src/blob/5271000b44abe23907b73bbb3aa38ddf4a0bce08/sys/uvm/uvm_param.h#L81
+21:02 <@mulander> ok I see why my search failed
+21:02 <@mulander> thanks rain1 
+21:02 <@mulander> so I tend to grep for ^fn
+21:02 <@mulander> as by style(9) function are defined as
+21:02 <@mulander> rettype\n
+21:02 <@mulander> name(args)
+21:02 <@mulander> so grep ^name is quick way to find a function without the noise
+21:02 <@mulander> but obviousy fails for macros.
+21:03 <@mulander> *obviously
+21:03 < DuClare> So the second thing to grep for is obviously define.*fn
+21:03 < DuClare> :)
+21:03 <@mulander> yup :)
+21:04 <@mulander> ok next we define 2 red black trees
+21:04 <@mulander> ne for src address tracking
+21:04 <@mulander> second one for anchors
+21:04 <@mulander> we initialize the ruleset
+21:04 <@duncaen> http://netbsd.gw.com/cgi-bin/man-cgi?atop+9+NetBSD-current
+21:04 <@mulander> initialize our queues
+21:04 < vyvup> the atop check is for checking for small memory systems and setting up a limit for those?
+21:05 <@mulander> sys/net/pfvar.h
+21:05 <@mulander> 1385:#define PFR_KENTRY_HIWAT_SMALL     100000  /* Number of entries for tiny hosts */
+21:05 <@mulander> yes
+21:06 <@mulander> L189 mentions garbage collection
+21:06 <@mulander> I didn't knew pf internally had one
+21:06 < vyvup> btw, I'm using the indexed code at bxr.su, makes it very easy to find those symbols
+21:06 < vyvup> e.g. http://bxr.su/OpenBSD/sys/net/pf_ioctl.c#pfopen
+21:07 <@mulander> then we initialize default timeouts
+21:08 <@mulander> pf_normalize_init
+21:08 <@mulander> for initializing the subsystem responsible for packet normalization
+21:09 <@mulander> bzero'ing the pf_status struct
+21:09 <@mulander> and an interesting XXX comment
+21:09 <@mulander> 228    /* XXX do our best to avoid a conflict */
+21:09 <@mulander> 229    pf_status.hostid = arc4random();
+21:10 <@mulander> worht to have in mind when we see hostid to see what conflicts we are talking about here
+21:10 <@mulander> and we schedule creation of a kernel thread
+21:10 <@mulander> with the name of pfpurge defined in L236
+21:11 <@mulander> the thread itself lives in http://bxr.su/OpenBSD/sys/net/pf.c#1202
+21:12 < vyvup> some info about hostid: http://man.openbsd.org/pf.4#DIOCSETHOSTID
+21:12 <@mulander> it sleeps, grabs the network lock, then the pf lock, and removes expired states and types
+21:12 < Niamkik> hum, so, OpenBSD Packet Filter is multi-threaded?
+21:12 < vyvup> apparently for pfsync, keeping track which host a rule originated
+21:12 < kl3> Niamkik: no
+21:14 < vyvup> kernel threads are processes that live inside the kernel
+21:14 <@mulander> # ps -auxk | grep pf
+21:14 <@mulander> root     36716  0.0  0.0     0     0 ??  DK    10:41AM    0:03.12 (pfpurge)
+21:14 <@mulander> shows our kernel pfpurge thread
+21:15 < Niamkik> ok!
+21:15 < Niamkik> thanks :)
+21:15 <@mulander> the -k flag reveals kernel threads in ps
+21:16 <@mulander> pfopen opens up the device
+21:16 <@mulander> ENXIO represents a 'device not configured' error
+21:16 <@mulander> pfclose - closes our device
+21:17 <@mulander> pf_rm_rule , rule removal
+21:17 < vyvup> apparently there can only be one pf device
+21:17 <@mulander> why would you need more?
+21:17 <@mulander> /dev/pf controls your kernels pf
+21:18 <@mulander> you have multiple interfaces for logging
+21:18 < vyvup> you wouldn't, but it is a special property of this device
+21:18 < vyvup> so different than other devices in this regard
+21:18 < vyvup> (of course there are some other pseudo devs with the same property)
+21:18 < vyvup> or maybe it's a property of all pseudo-devs, that I'm not sure of
+21:19 <@mulander> pf_rm_rule drops the rule and everything related to it.
+21:20 <@mulander> pf purge rule call pf_rm_rule and does additional ref counting
+21:21 <@mulander> it's also called from the context of our kernel purge thread
+21:22 <@mulander> tagname2tag is converting a named tag to an identifier
+21:22 <@mulander> tag2tagname does the reverse
+21:23 <@mulander> tag_unfref deletes a tag
+21:23 <@mulander> pf_tag* functions are wrappers for the above
+21:23 <@mulander> next we have label handling functions
+21:24 <@mulander> pf_q* functions are reusing the tag mechanism for queue naming it apperas.
+21:24 <@mulander> *appears
+21:25 <@mulander> next we have rules application and rollback followed by queue removal code
+21:25 <@mulander> theres a queue interface struct and pf_ifp2q converting an interface to a pf_queue interface
+21:26 -!- Irssi: Pasting 6 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+21:26 <@mulander> 559struct pf_queue_if {
+21:26 <@mulander> 560    struct ifnet        *ifp;
+21:26 <@mulander> 561    const struct ifq_ops    *ifqops;
+21:26 <@mulander> 562    const struct pfq_ops    *pfqops;
+21:26 <@mulander> 563    void            *disc;
+21:26 <@mulander> 564    struct pf_queue_if  *next;
+21:26 <@mulander> 565};
+21:26 <@mulander> an interesting feature (and very common in the kernel)
+21:26 <@mulander> pf_queue_if wraps another struct with additional data
+21:27 <@mulander> yet we can cast from pf_queue_if to ifnet and back
+21:27 <@mulander> if we have a pointer to any one of them and know that the cast is valid
+21:28 < DuClare> What struct does it wrap?
+21:28 < DuClare> I only see it having pointers.
+21:28 <@mulander> ifnet
+21:28 <@mulander> what I mean by that you can do:
+21:28 <@mulander> pf_queue_if a;
+21:28 <@mulander> ifnet b = a->ifp;
+21:28 <@mulander> pf_queue_if c;
+21:29 <@mulander> c = (pf_queue_if)b;
+21:29 <@mulander> you can get back a pf_queue_if from the embedded field
+21:29 <@mulander> since the standard guarantees they both start at the same memory address
+21:30 < DuClare> Again it doesn't wrap ifnet, it just contains a pointer to an ifnet
+21:30 <@mulander> bad wording on my part
+21:31 < DuClare> You can't cast a struct ifnet to a struct pf_queue_if
+21:31 < DuClare> That's as nonsencial as a cast can get
+21:31 <@mulander> I saw such casts in the athn usb driver
+21:32 < DuClare> I think you saw something a little different
+21:32 < DuClare> Ah yes the softc casts
+21:32 <@mulander> yes
+21:32 < DuClare> That is a little different
+21:33 <@mulander> can you elaborate? I don't want to mislead
+21:34 < Niamkik> do you have reference to athn code? I'm a bit curious
+21:34 < Niamkik> (well, the line :p)
+21:35 <@mulander> http://bxr.su/OpenBSD/sys/dev/usb/if_athn_usb.c
+21:36 <@mulander> http://bxr.su/OpenBSD/sys/dev/usb/if_athn_usb.c#291 for a sample cast
+21:36 < Niamkik> ok thanks
+21:36 <@mulander> there's no athn_usb_softc passed to athn_usb_attachhook
+21:36 <@mulander> you get a struct device
+21:37 < DuClare> struct athn_softc literally does wrap a struct device
+21:37 < DuClare> struct athn_softc {
+21:37 < DuClare>         struct device                   sc_dev;
+21:37 < DuClare> ...
+21:37 < DuClare> in dev/ic/athnvar.h
+21:37 < vyvup> the difference is the pointer
+21:37 <@mulander> DuClare: thanks for spotting
+21:37 < DuClare> In turn, struct athn_usb_softc {
+21:37 < DuClare>         struct athn_softc               sc_sc;
+21:37 < DuClare> ...
+21:38  * mulander retracts the initial statement
+21:39 < DuClare> So whenever you have a pointer to a struct athn_usb_softc, it wraps a struct that wraps a struct device at the beginning of it.  So you can cast the pointer if you only care about the device portion.  Or vice versa -- from struct device * to what if_athn_usb.c does
+21:41 <@mulander> thanks, I appreciate the correction
+21:41 <@mulander> ok I'm already eating away duncaen's time, let's wrap this up at L559 pf_queue_if
+21:41 <@mulander> --- DONE ---

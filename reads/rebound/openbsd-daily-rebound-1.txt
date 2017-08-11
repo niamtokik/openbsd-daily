@@ -1,0 +1,243 @@
+23:00 [Users #openbsd-daily]
+23:00 [@brynet        ] [ biniar      ] [ duncaen      ] [ jnu      ] [ oldlaptop] [ sshiffle1t    ] 
+23:00 [@fcambus       ] [ BlackFrog   ] [ ebag         ] [ kAworu   ] [ owa      ] [ stateless     ] 
+23:00 [@mikeb         ] [ bluewizard  ] [ edlm10       ] [ kittens  ] [ pepton   ] [ sv_           ] 
+23:00 [@mulander      ] [ brianpc     ] [ electricto4d ] [ kpcyrd   ] [ phy1729  ] [ tarug0        ] 
+23:00 [@qbit          ] [ brianritchie] [ entelechy    ] [ kraucrow ] [ poptart  ] [ taschenraeuber] 
+23:00 [@t_b           ] [ bruflu      ] [ erethon      ] [ kysse    ] [ Putti    ] [ tdjones       ] 
+23:00 [ acgissues     ] [ bsdtux      ] [ erodger      ] [ lucias   ] [ quinq    ] [ Technaton     ] 
+23:00 [ administraitor] [ catatonic   ] [ fcbsd        ] [ mandarg  ] [ rabbitear] [ thrym         ] 
+23:00 [ afics         ] [ cengizIO    ] [ filwishe1    ] [ mattl    ] [ radio2034] [ timclassic    ] 
+23:00 [ akkartik      ] [ commandoline] [ fuyuuri      ] [ metadave ] [ rain1    ] [ TuxOtaku      ] 
+23:00 [ antranigv     ] [ corbyhaas   ] [ geetam       ] [ mfgmfg   ] [ rajak    ] [ vbarros       ] 
+23:00 [ ar            ] [ davl        ] [ ggg`         ] [ monsieurp] [ S007     ] [ veonik        ] 
+23:00 [ asie          ] [ deei        ] [ ghostyy      ] [ MurphSlaw] [ salv0    ] [ Vuokko        ] 
+23:00 [ Atomic_ziVkC  ] [ Dhole       ] [ harrellc00per] [ nacci    ] [ scottj   ] [ vyvup         ] 
+23:00 [ azend|vps     ] [ dlg         ] [ IcePic       ] [ ned      ] [ sdafsd   ] [ whyt          ] 
+23:00 [ bcd           ] [ dostoyesvky ] [ imaginary    ] [ Nemo_bis ] [ selckin  ] [ wilornel      ] 
+23:00 [ bch           ] [ Dowzee      ] [ iomotoko     ] [ nmeum    ] [ skrzyp   ] [ WubTheCaptain ] 
+23:00 [ benpicco      ] [ dsp         ] [ jbernard     ] [ noexcept_] [ smiles`  ] [ xor29ah       ] 
+23:00 [ bhorun        ] [ DuClare     ] [ jcs          ] [ norakam  ] [ Soft     ] [ zyklon        ] 
+23:00 -!- Irssi: #openbsd-daily: Total of 114 nicks [6 ops, 0 halfops, 0 voices, 108 normal]
+23:00 < duncaen> ok lets do it
+23:00 < duncaen> --- code read: rebound ---
+23:01 < duncaen> Ok lets start with the man page, i will refer to man pages as name(section) you can use your openbsd systems man or msn.openbsd.org to read them
+23:02 < duncaen> Lets start with rebound(8) which would be http://man.openbsd.org/rebound.8 on the website
+23:02 < duncaen> We can see, rebound is a DNS Proxy
+23:03 < duncaen> It listens on localhost and forwards request to a real DNS server, what it doesnt mention is that rebound does caching
+23:04 < duncaen> it uses a sysctl named "kern.dnsjackport" to intercept all DNS traffic, lets see sysctl(3) and search for "kern.dnsjackport" to see if we can find out more about it
+23:05 < duncaen> "When non-zero, the localhost port to which all DNS sockets should be redirected." thats all, it says, maybe if we have time later we can look more into it
+23:05 < BlackFrog> test
+23:06 < duncaen> rebound just has to flags, -c for a config file and -d the Debug mode
+23:06 < duncaen> Ok lets open usr.sbin/rebound, there are two source files, rebound.c and randomid.c
+23:07 < rain1> https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c https://github.com/openbsd/src/blob/master/usr.sbin/rebound/randomid.c
+23:07 < duncaen> randomid.c is just 78 lines and just defines one function which is named randomid
+23:07 < duncaen> lets look at rebound.c first, its exactly 1000 lines
+23:08 < duncaen> the includes first, this gives us a small overview of what it uses
+23:08 < duncaen> the first ones are not very interesting, but sys/queue.h, sys/tree.h and sys/event.h are interesting to me, as they are more bsd specific
+23:09 < duncaen> lets take a very fast look at the man pages for sys/queue.h and sys/tree.h, queue(3) and tree(3)
+23:09 < duncaen> queue: "implementations of singly-linked lists, doubly-linked lists, simple queues, and tail queues"
+23:09 < duncaen> tree: "implementations of splay and red-black trees"
+23:10 < duncaen> they both provide a bunch of macros, lets see which one rebound uses and go back to the man pages later
+23:11 < duncaen> ok, next sys/event.h which is for kqueue(2) http://man.openbsd.org/kqueue.2
+23:11 < duncaen> "kernel event notification mechanism" which is like poll or select, but a bit more fancy and it can do more than just look at file descriptors
+23:12 < duncaen> lets skip the other headers, they are not very interesting
+23:13 < duncaen> rebound defines a macro named "MINIMUM" which returns the smaller of two arguments, easy, next
+23:13 < duncaen> and then there is the forward declaration for the randomid function we saw earlier defined in randomid.c
+23:14 < duncaen> a union named sockun which can be one of four different sockaddr structures
+23:14 < duncaen> a timespec named now, and two integers, debug and daemonize
+23:15 < duncaen> debug is probably for the -d flag we saw earlier in the man page rebound(8)
+23:15 < duncaen> then two structs, dnspacket and dnscache
+23:15 < duncaen> dnspacket holds six unsigned 16 bit integers and a char array as last field and a comment /* ... */ indicating that there is more
+23:15 -!- BlackFrog_ is now known as BlackFrog
+23:16 < duncaen> this is for the char array qname, its variable in length, a \0 would indicate the end
+23:18 < duncaen> then the dnscache struct which has two variables below it,cache fifo and cachetree, both use TAILQ_HEAD and RB_TREE respectively as their type, those are the macros from tree(3) and queue(3)
+23:19 < duncaen> cachefifo is a tail queue which holds dnscache structres, fifo means first in first out, which is what a TAILQ aka tail queue is
+23:19 < duncaen> and RB is a red-black tree or binary try
+23:19 < duncaen> s/try/tree
+23:20 < duncaen> the dnscache structure has a field for both the queue and the tree, a fifo with the TAILQ_ENTRY macro and a field named cachenode with the RB_ENTRY macro
+23:21 < duncaen> then there are two pointers to dnspacket named req and resp and two size_t variables named reqlen and resplen
+23:22 < duncaen> and the last field is a timespec named ts which just holds a time
+23:22 < duncaen> then there is a macro RB_PROTOTYPE_STATIC, lets see man tree(3) again
+23:22 < duncaen> RB_PROTOTYPE_STATIC(NAME, TYPE, FIELD, CMP);
+23:22 < duncaen> NAME, matches our cachetree variable which we earlier defined with the RB_HEAD macro
+23:22 < duncaen> TYPE is the dnscache struct
+23:23 < duncaen> FIELD is cachenode, which is a field in the dnscache struct we defined with RB_ENTRY
+23:23 < duncaen> And CMP as cachecmp, Lets see what tree(3) says about CMP for RB trees
+23:24 < duncaen> ok a comparison function which gets two arguments of type TYPE which is dnscache in our case
+23:24 < duncaen> lets jump to the dnscmp function
+23:24 < duncaen> s/dnscmp/cachecmp
+23:24 < duncaen> 157: cachecmp(struct dnscache *c1, struct dnscache *c2)
+23:25 <@mulander> https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L157
+23:25 < duncaen> OK if reqlen of both structs are the same it uses memcmp(3) to compare the memory of both structures
+23:26 < duncaen> memcmp(3) returns 0 if both memory areas are identical and 1 if they are different
+23:26 < duncaen> otherwise our cachecmp function just returns -1 if the reqlen field of the first dnscache is smaller than the second dnscache struct we got as arguments c1 and c2
+23:27 < duncaen> and 1 if this is not the case
+23:27 < duncaen> ok back to line 90
+23:27 < duncaen> https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L90
+23:28 < duncaen> lets skip to the request structure
+23:28 < duncaen> at line 97
+23:28 < duncaen> "requests are kept on a fifo list, but only after socket s is set."
+23:28 < duncaen> so we have another tail queue for requests
+23:29 < duncaen> the request struct has mainly fields related to sockets, and two fixed length char arrays, origname and newname
+23:29 < duncaen> then just a few more boring variables we can skip for now
+23:31 < duncaen> then we have two functions logmsg and logerr which output log messages to syslog or stdout wether the debug flag was set
+23:31 < duncaen> *the logerr function logs to stderr instead of stdout
+23:32 < duncaen> ok lets just go to the main entry point now at line 904
+23:32 < duncaen> https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L904
+23:33 < duncaen> there are two signal(3) function calls, to ignore SIGPIPE and SIGUSR1
+23:33 < duncaen> then we have the getopt loop and switch
+23:34 < duncaen> there is something interesting, there is a -W flag which is not documented in the man page and it sets the daemonize variable to 1
+23:34 < duncaen> lets come pack to it later, this is related to the rexec model which a number of openbsd daemons use
+23:35 < duncaen> a closefrom(2) call which closes all file descriptiors from 3 and upwards
+23:35 < duncaen> /* make sure we consistently open fds */
+23:35 < duncaen> this is related to the reexec model too, we come back later to it
+23:36 < duncaen> then there is some socket setup code, yea bsd sockets, not the most beatiful api we have from the BSDs :)
+23:37 < duncaen> it setups a listening SOCK_DATAGRAM socket on localhost/127.0.0.1 and on the port jackport which is 54
+23:39 < duncaen> and another socket for ipv6 on the same port and the ipv6 loopback address
+23:40 < duncaen> ok i skipped one socket, we actually open 4 sockets, tcp and udp ipv4 and tcp and udp for ipv6
+23:41 < duncaen> after the socket code there is a atexit(3) call with a function pointer argument resetport
+23:41 < duncaen> resetport is defined on line 888 https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L888
+23:42 < duncaen> ok this is the kern.dnsjacking sysctl, but this one just resets it to the default value, after rebound closes
+23:43 < duncaen> ok jump back where we come from, the atexit call, after it there is another sysctl(3) call, this times it sets the kern.dnsjacking to our port 54 which was reset in the resetport function
+23:44 < duncaen> now there are two different branches depending on if we use the -d debug flag or not, if we dont use the debug flag then rebound uses daemon(3) to daemonize
+23:44 < duncaen> and then goes into the monitorloop function
+23:45 < duncaen> if debug is set it just opens the config file and goes into the workerloop
+23:45 < duncaen> lets see what the monitorloop function does
+23:45 < duncaen> its defined on line 802 https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L802
+23:46 < duncaen> ok there we go, kqueue from the sys/event.h header we saw earlier
+23:46 < duncaen> the comment already says a lot /* catch these signals with kevent */
+23:48 < duncaen> so for both signals SIGTERM and SIGHUP we first call signal(3) to ignore the signal and then use EV_SET and kevent from kqueue(3) to listen to both signals with kqueue instead of some signal traps
+23:48 < duncaen> then we enter the main loop, while(1){}
+23:49 < duncaen> we see the openconfig function mentioned again, its called if conffd is set to -1 and we use the return value of it to set the conffd variable
+23:49 < duncaen> lets take just a fast look at openconfig at line 764
+23:50 < duncaen> it just uses open(2) to open the config file in readonly mode and later it returns the file descriptor
+23:51 < duncaen> if kq is set, which is the kqeueue we initialized earlier then it uses the filedescriptor and the EVFILT_VNODE filter to listen for NOTE_DELETE and NOTE_ATTRIB events on the config file
+23:52 < duncaen> this triggers a event in our kqueue if the config file is deleted or its attributes change
+23:52 < duncaen> ok back to the monitorloop
+23:53 < duncaen> there is a reexec function, I already mentioned the reexec model earlier, lets see the reexec function and then lets see if we talk about the reexec model now or later
+23:55 < duncaen> Ok lets go into rexec now, we see already that the function uses execl(3) to execute /usr/bin/rebound with the -W flag
+23:55 < duncaen> this is the undocumented flag
+23:55 < duncaen> which sets daemonized to 1
+23:56 < duncaen> Im not sure which application introduced the reexec model in OpenBSD, but i know that smtpd as example uses this model, and there was some blogpost talking about it
+23:56 <@brynet> I believe it was OpenSSH.
+23:57 < duncaen> As far as i know rexec is mainly used to make the address space randomization more effective, instead of just forking new threads you fork and execute the same executable to get a completely new randomzied memory layout for the new process
+23:59 < duncaen> this is all the reexec function does, it calls fork(2), which returns the pid in the parent process, and and 0 in the child process, if pid is 0 it just executes rebound again with -W and if the pid is set reexec returns it and we jump back to the monitorloop
+00:00 < duncaen> ok im back in the monitor loop at line 826 where reexec was called
+00:00 < duncaen> now we see each time the loop runs through a new child is forked
+00:00 < duncaen> child is the pid we got from fork(2) in the reexec function
+00:01 < duncaen> we use the pid (child) and register a EVFILT_PROC in our kqueue
+00:01 < duncaen> with the NOTE_EXIT filter
+00:01 < duncaen> the kqueue will now notify us if the process with the pid we have in the child variables exists
+00:02 < duncaen> now timeout is set to NULL and we enter another loop
+00:03 < duncaen> this time kevent is called with the second and the third argument 0, the other times where we used kevent to add events to our queue this was different, those arguments where set and the later arguments where all 0
+00:03 < duncaen> this is because this time the kevent call is used to receive events instead of adding or changing events
+00:04 < duncaen> the timeout argument is NULL so the kevent will wait indefinitely until one of the events we registered earlier occurs
+00:05 < duncaen> then there is the switch which checks the filter of the returned event that occured, EVFILT_VNODE, EVFILT_SIGNAL or EVFILT_PROC
+00:07 <@mulander> why do we sleep(1) in EVFILT_VNODE?
+00:07 < duncaen> first EVFILT_VNODE, this was for our config file filedescriptor, if this occurs the config file was changed or deleted, rebound then closes the conffd sleeps for a second and uses raise(3) to send a SIGHUP signal to the current thread or process
+00:09 < duncaen> not sure why we sleep for one second, a blame doesnt really show much its part of a larger commit a commit earlier is another big commit not mentioning why exactly one second
+00:10 < duncaen> lets not this down and ask later one of the committers or maintainers
+00:11 < duncaen> s/not/note
+00:11 < duncaen> next case is EVFILT_SIGNAL which would be what happened on SIGTERM or SIGHUP
+00:12 < duncaen> remember, SIGHUP is what happends after we get the EVFILTER_NOTE from the last case
+00:14 <@brynet> The sleep(1) may be for quiescing, as it's being notified that the config file has changed and then raising a signal.
+00:15 < duncaen> ok this one is simple, if we receive SIGHUP we send a SIGHUP to the child process, if childdead is set we goto the doublebreak label, in this case we dont send a signal, i guess this means the childs is already dead and we dont have to send it again, lets keep this in mind and try to remember to look into it on the next time childdead is defined or we get to the doublebreak label
+00:16 < duncaen> on SIGTERM we just log a message, send SIGTERM to the child process and exit with 0 as argument which is a successfull exit
+00:16 < duncaen> the next case is EVFILT_PROC whcih was we used with NOTE_EXIT on the pid of our child process
+00:17 < duncaen> here we set log "observed child exit"
+00:18 < duncaen> and then set childdead to 1, which we had earlier in the code while handling SIGHUP received for ourself
+00:18 < kl3> I guess the sleep is there to ensure rebound reads the file's new content. otherwise the signal handler routine (reloading config) might run before the respective writes were committed to the filesystem
+00:18 < duncaen> and if hupped is set we use goto again to jump to the doublebreak label hupped was set to 1 if we receive SIGHUP
+00:19 < duncaen> and we set the timeout to one second
+00:20 < duncaen> so if the child process dies the kevent call just waits one second instead of indefinitely
+00:21 < duncaen> this means we get not event returned from kevent and the condition on line 838 would be true https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L838
+00:21 < duncaen> in this case rebound logs "child died without HUP"
+00:21 < duncaen> and later in our switch in the default case "don't know what happened"
+00:23 < duncaen> so what this loop does it basically waiting until we receive SIGHUP, then sends SIGHUP to the child process, then expects the child process to exit
+00:23 < duncaen> in this case the goto doublebreak is used and we just jump exactly after the inner loop, remember we have two while loops nested
+00:24 < duncaen> the doublebreak label is defined on line 881 https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L881
+00:25 < duncaen> there wait(2) is called, which waits until we get the
+00:25 < duncaen> status information for our child process, but we just ignore it, we just make sure its really exited
+00:25 < rain1> i'm not sure I understand this part
+00:25 < duncaen> the wait or the two loops?
+00:25 < rain1> yeah
+00:26 < rain1> the doublebreak is to relaunch children, so if (childdead) goto doublebreak; makes sense
+00:26 < rain1> but if it calls kill(child, SIGHUP); it doesn't do the jump
+00:26 < rain1> oh maybe that means it'll happen next iteration
+00:27 <@t_b> the child will get the signal, exit and EVFILT_PROC will trigger, then we jump from there
+00:27 < duncaen> yea should have jumped forward, lets see what happens on SIGHUP in the child process if rebound is started with -W
+00:28 < duncaen> lets not read the code now, but on line 662 https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L662
+00:28 < duncaen> there is what happens if the child process receives SIGHUP, it just logs and exits with 0 aka successfull
+00:28 < duncaen> this means our monitorloop receives the EVFLT_PROC with NOTE_EXIT
+00:29 < duncaen> *EVFILT_PROC
+00:30 < duncaen> so if the main process recives SIGHUP it sets hupped = 1, sends SIGHUP to the child, then the child just dies, and the main process receives tthe EVFILT_PROC evet and hupped is set to 1 and it will goto doublebreak
+00:32 < duncaen> then it just wait(2)s for the child process to send the status info but uses NULL as argument because we are not interested in it, we just jump back to the beginning of the outer loop, reset the variables hupped and childdead back to 0, reopen the config file if it was deleted or changed and then start a new child process
+00:34 < duncaen> i think we now can follow the codepath related to the -W flag whcih was set for our child process
+00:35 < duncaen> in the getopt ealier if -W was set we just set daemonize to 1 and then call workerloop with a bunch of integers as arguments 8, 3, 4, 5, 6
+00:36 < duncaen> lets go to the workerloop function on line 609 https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L609
+00:36 < duncaen> workerloop(int conffd, int ud, int ld, int ud6, int ld6)
+00:37 < duncaen> the first argument is the conffd, and the other ones matchs the tcp and udp socket variable names for ipv4 and ipv6 we opened in the parent process
+00:37 < duncaen> so the numbers we passed to workerloop are file descriptors we inherited from the parent process, 8 aka configfd as the last file we opened
+00:37 < duncaen> the other fds for the socket we opened one by one 3,4,5,6
+00:38 < duncaen> there is one fd we dont use in the child process, which is fd 7 the kqueue file descriptor we use in the monitor process
+00:39 < duncaen> ok lets look at the workerloop code
+00:39 < duncaen> first a bunch of variables, we skip them we are already reading this for too long :D
+00:40 < duncaen> the child initialized another kqueue with kqueue(3)
+00:40 < duncaen> if debug is not set we get the parent process id getppid(2)
+00:42 < duncaen> and then register a kqueue event to filter for EVFILT_PROC and with NOTE_EXIT which will notify us while we wait for events with kevent(2) if the parent process, the monitor/monitorloop exits
+00:42 < duncaen> we call workerinit() which is defined on line 570
+00:43 < duncaen> in workerinit we use getrlimit and setrlimit with RLIMIT_NOFILE to get and set the maximum number of open filedescriptors our child can open
+00:44 < duncaen> our child is in this case ourself, if i say child we talk about the process started with -W running the workerloop
+00:45 < duncaen> so we set the number of open filedescritpors to the maximum
+00:45 < duncaen> then we use the current number substracted by 10 to set connmax
+00:46 < duncaen> if connmax is larger than 512 we just set it to 512
+00:46 < duncaen> then we set cachemax cachemax = 10000; /* something big, but not huge */
+00:46 < duncaen> then we initialize our two tail queues and the red-black tree
+00:47 < duncaen> we get the passwd entry for the _rebound user, chroot into the home directory of _rebound
+00:47 < duncaen> and use chdir(2) to change into the new root directory
+00:47 < duncaen> then we set the process title
+00:49 < duncaen> we intialize the groups to the groups of the _rebound user, set all gid real, effective and saved gid using setresgid(2), same for all three uids and setresuid(2)
+00:49 < duncaen> so the worker process is now the user and group _rebound
+00:50 < duncaen> then we pledge with promises to use inet for sockets and stdio for read, write etc
+00:50 < duncaen> ok back to workerloop line 630
+00:51 < duncaen> calling readconfig with conffd and a pointer with the type of our sockun union
+00:51 < duncaen> readconfig is defined on line 526 https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L526
+00:52 < duncaen> this function reads the config file, which is /etc/resolv.conf by default, more infos about it are documented in resolv.conf(5)
+00:52 < duncaen> rebound just cares about the "nameserver" option
+00:53 < duncaen> it reads each line and checks if it starts with "nameserver"
+00:54 < duncaen> then it checks if the following ip is "127.0.0.1" which would be bad because it would just create a loop
+00:56 < duncaen> if its a different ip rebound try to read it as a ipv4 address and then as a ipv6 address if its not v4
+00:56 < duncaen> it then sets either sockaddr_in or sockaddr_in6 from our second argument which is the pointer to some memory with our sockun union as type
+00:58 < duncaen> so rebound just cares about one nameserver entry, it does not support multiple nameservers the last one is the effective one
+00:58 < duncaen> readconfig returns AF_INET or AF_INTE6 to indicate if the dns server it proxies uses a v4 or v6 ip address
+00:58 < duncaen> ok back to the workerloop where readconfig was called
+00:59 < duncaen> line 634 https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L634
+00:59 < duncaen> we setup kevents for four  EVFILT_READ events whcih we register on our four sockets: tcp, udp ipv6 and ipv4
+01:00 < duncaen> so later kevent notifies us if we can read from any of those file descriptors
+01:00 < duncaen> then we use EVFILT_SIGNAL again which we used ealier already for the parent/monitorloop process
+01:01 < duncaen> we use kqueue to get notified about SIGHUP and about SIGUSR1 this time
+01:01 < duncaen> then we enter a loop and call kevent again in the mode that waits for events, this time we can get up to 4 events a t once
+01:02 < duncaen> timeout was set ealier to NULL which means we wait indefinitely agagin
+01:02 < duncaen> if we received one ore more events we ser the global now variable to the current monotonic time
+01:03 < duncaen> with clock_gettime(2) and CLOCK_MONOTONIC as clock_id
+01:04 < duncaen> CLOCK_MONOTONIC is not the wall clock, it does not jump, so it does not jump back if a leapsecond happens or ntp does somethin weird
+01:05 < duncaen> we skip the stopaccepting if now, as its not set yet and I'm not sure in whcih case this is used
+01:05 < duncaen> then we have a for loop which is used to loop over the events we got from kevent, remember we can get up to 4 at once this time
+01:06 < duncaen> we have a switch again which uses the events filter to determine what should happen
+01:06 < duncaen> the first case is for EVFILT_SIGNAL if we receive one of the signals SIGHUP or SIGUSR1
+01:07 < duncaen> on SIGHUP we just log a nice message "hupped, exiting", and call exit with 0 to exit sucessfull
+01:07 < duncaen> we looked at this ealier while looking at the monitorloop handling how configuration file changes and SIGHUP signals to the monitor process are handled
+01:08 < duncaen> the else is when SIGUSR1 happens, in this case it logs two lines, the connection statistics and the cache statistics
+01:08 -!- anon is now known as Guest33048
+01:08 < duncaen> next case is EVFILT_PROC which happens if the monitor process exits
+01:08 < duncaen> in this case we log "parent died" and exit too
+01:09 < duncaen> the next case is EVFILT_WRITE we did not register this event in the queue yet, lets skip this until we register it
+01:09 < duncaen> the next case is EVFILT_READ which we registered earlier on all of our 4 sockets
+01:10 < duncaen> there we check if its a udp request or a tcp request
+01:11 < duncaen> and another else
+01:12 < duncaen> that uses the sendreply function, but lets look first how read events on our udp socket file descriptors are handled
+01:12 < duncaen> newrequest is called in this case which is defined on line 268 https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L268
+01:13 < duncaen> ok lets stop here and continue tomorrow, its already getting late and i think i went too deep into each single step D:
+01:14 < duncaen> lets start tommorow at the EVFILT_PROC case again in the workerloop process
+01:14 < duncaen> -- DONE: rebound part 1 ---

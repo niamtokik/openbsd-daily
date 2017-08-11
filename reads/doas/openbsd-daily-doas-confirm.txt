@@ -1,0 +1,264 @@
+18:03 < mulander_> --- code read: doas ---
+18:04 < mulander_> ** goal: add a prompt option that echoes the command to be executed back to the user and asks for confirmation before continuing **
+18:04 < mulander_> this is a modification we want to do based on things we learned from yesterdays code reading https://junk.tintagel.pl/openbsd-daily-doas.txt
+18:05 < mulander_> first we make sure we have the latest sources
+18:05 < mulander_> cd /usr/src/usr.bin/doas
+18:05 < mulander_> cvs -q up -PAd
+18:05 < mulander_> we also make sure we can build he unmodified file
+18:05 -!- Irssi: Pasting 6 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+18:05 < mulander_> $ make
+18:05 < mulander_> yacc -d parse.y
+18:05 < mulander_> mv y.tab.c parse.c
+18:05 < mulander_> cc -O2 -pipe  -I/usr/src/usr.bin/doas -Wall -Werror-implicit-function-declaration  -c parse.c
+18:05 < mulander_> cc -O2 -pipe  -I/usr/src/usr.bin/doas -Wall -Werror-implicit-function-declaration  -c doas.c
+18:05 < mulander_> cc -O2 -pipe  -I/usr/src/usr.bin/doas -Wall -Werror-implicit-function-declaration  -c env.c
+18:05 < mulander_> cc   -o doas parse.o doas.o env.o 
+18:05 < mulander_> $ ./doas                                                                                                                                                                                        
+18:05 < mulander_> usage: doas [-Lns] [-a style] [-C config] [-u user] command [args]
+18:06 < mulander_> great, we can build and execute.
+18:06 < mulander_> sample behavior we want to achieve
+18:08 < mulander_> doas command
+18:09 < mulander_> doas: asked to execute `command` proceed? [Yn]
+18:09 < mulander_> answering no, bails further execution
+18:09 < mulander_> answering yes proceeds with normal execution (authing etc)
+18:10 < mulander_> goal is to prevent shell scripts riding on an existing persist setup, from being granted auth just because the session is still authenticated
+18:11 < mulander_> and also for setups where nopass is used to have a quick way to double check the executed command
+18:11 < mulander_> first of all I want to check if persist can actually be hijacked by scripts
+18:12 < mulander_> for that I'm going to add a rule on my laptop
+18:12 < mulander_> permit persist mulander as root
+18:13 < mulander_> and a file test.sh
+18:13 < mulander_> with a single line doas whoami
+18:14 < mulander_> and do a quick test.
+18:14 -!- Irssi: Pasting 15 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+18:14 < mulander_> $ doas whoami
+18:14 < mulander_> doas (mulander@fishtank.local) password: 
+18:14 < mulander_> root
+18:14 < mulander_> $ doas whoami
+18:14 < mulander_> root
+18:14 < mulander_> $ ./test.sh                                                                                                                                                                                     
+18:14 < mulander_> doas (mulander@fishtank.local) password: 
+18:14 < mulander_> $ doas whoami 
+18:14 < mulander_> root
+18:14 < mulander_> $ sh test.sh                                                                                                                                                                                    
+18:14 < mulander_> doas (mulander@fishtank.local) password: 
+18:14 < mulander_> $ doas whoami
+18:14 < mulander_> root
+18:15 < mulander_> apparently you don't have to worry that doas can be hijacked
+18:15 < mulander_> as we learned yesterday, the code uses a ioctl attached to the tty
+18:15 < mulander_> and the code we read also checkes that the session parent process matches
+18:15 < mulander_> I believe this is why a shell script can't hijack your already authenticated session \o/
+18:16 < mulander_> still as the example demonstrates, we have no idea what test.sh wants to execute with elevated privileges.
+18:16 < mulander_> this is a single line script, but one can easily imagine much larger ones or obfuscated that would be hard to verify
+18:16 < mulander_> this feature could also be very annoying for users
+18:17 < mulander_> so we decide that we need an option that explicitly enables the confirmation prompt
+18:17 < mulander_> permit prompt mulander as root
+18:17 < mulander_> is our desired syntax for a rule
+18:17 < mulander_> where prompt is the newly created keyword
+18:18 < mulander_> when prompt is present doas should tell us what it was asked to do, and prompt if we want to continue
+18:20 -!- You're now known as mulander
+18:21 < brynet> prompt and permit look similar at a glance, maybe confirm would be a better keyword?
+18:21 < mulander> sounds good
+18:21 < mulander> thanks for chipping in! :)
+18:22 < mulander> I'm copying over my current doas.conf as it has a few mre rules (from doas.conf man page) - that way when I edit doas I'm more likely to spot if I broke other rules
+18:22 < mulander> now, opening parse.y
+18:23 < mulander> jumping to line 72 to add a new token TCONFIRM
+18:23 < mulander> we don't need an exclusion rule like NOPASS | PERSIST
+18:24 < mulander> since, we might want to confirm a command both when no password is required
+18:24 < mulander> and when persistence is active
+18:24 < mulander> we add our option in line 138
+18:25 < mulander>   3                 } | TCONFIRM {                                                                                                                                                               
+18:25 < mulander>   2                         $$.options = PERSIST;                                                                                                                                                
+18:25 < mulander>   1                         $$.envlist = NULL;                                                                                                                                                   
+18:25 < mulander> 142                 } 
+18:25 < mulander> fixing PERSIST to be CONFIRM
+18:26 < mulander> in line 215 we add a mapping to a keyword
+18:27 < mulander> 216         { "confirm", TCONFIRM }, 
+18:27 < mulander> https://gist.github.com/mulander/3ab64b79909b5c927a307bc017f14ccc
+18:28 < mulander> ^ initial diff to parse.y
+18:28 < mulander> now, time to add the CONFIRM constant to doas.h
+18:28 < mulander> options in doas.h are defined as
+18:28 < mulander>   2 #define NOPASS          0x1                                                                                                                                                                  
+18:28 < mulander>   1 #define KEEPENV         0x2                                                                                                                                                                  
+18:28 < mulander> 39  #define PERSIST         0x4 
+18:29 < mulander> this is bit masking
+18:30 < mulander> we should define ours as 0x8
+18:30 < mulander> #define CONFIRM                0x8
+18:30 < mulander> I also notice that NOPASS has inconsistent ident
+18:31 < mulander> scratch that, just my editor
+18:31 < mulander> ok, this should be enough to add a syntax (or so I think)
+18:31 < mulander> let's see if our code still compiles
+18:31 -!- Irssi: Pasting 6 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+18:31 < mulander> $ make
+18:31 < mulander> yacc -d parse.y
+18:31 < mulander> parse.y:143: syntax error
+18:31 < mulander>                 } | TPERSIST {
+18:31 < mulander>                 ^
+18:31 < mulander> *** Error 1 in /usr/src/usr.bin/doas (<sys.mk>:205 'parse.c')
+18:32 < mulander> I had a superflous closing brace
+18:32 < mulander> on line 142
+18:32 < mulander> code compiled
+18:32 < mulander> $ make
+18:32 < mulander> yacc -d parse.y
+18:32 < mulander> mv y.tab.c parse.c
+18:32 < mulander> cc -O2 -pipe  -I/usr/src/usr.bin/doas -Wall -Werror-implicit-function-declaration  -c parse.c
+18:32 < mulander> cc   -o doas parse.o doas.o env.o
+18:32 < mulander> let's test the -C option on our existing config file
+18:33 < mulander> $ ./doas -C doas.conf                                                                                                                                                                           
+18:33 < mulander> $ echo $?
+18:33 < mulander> 0
+18:33 < mulander> $ 
+18:33 < mulander> so we didn't break parsing
+18:33 < mulander> now make a copy of doas.conf as doas.new
+18:33 < mulander> adding a rule with confirm syntax
+18:33 < mulander> first run the system installed doas -C on it
+18:33 < mulander> $ doas -C doas.new                                                                                                                                                                              
+18:33 < mulander> doas: syntax error at line 11
+18:33 < mulander> $ 
+18:34 < mulander> $ sed '11q;d' doas.new                                                                                                                                                                          
+18:34 < mulander> permit confirm persist mulander as root
+18:34 < mulander> as expected stock doas doesn't understand 'confirm'
+18:34 < mulander> let's try our newly built binary
+18:35 < mulander> $ ./doas -C doas.new                                                                                                                                                                            
+18:35 < mulander> $ echo $?
+18:35 < mulander> 0
+18:35 < mulander> success, so we apparently properly added the option
+18:35 < mulander> we can now proceed to adding the behavior we want
+18:35 < mulander> opening up doas.c for edition
+18:36 < mulander> let's start with just echoing out the command
+18:37 < mulander> from yesterday we know that we have the command line to be executed prepared for us in cmdline variable
+18:37 < mulander> as that's what doas already uses for syslog reporting
+18:38 < mulander> now we need to decide when to print
+18:38 < mulander> obviously has to be at least post grabbing the rule and having the c md line ready
+18:38 < mulander> and it would be nice to do it before being authorized
+18:39 < mulander> it would also be nice to include all info that syslog gets
+18:39 < mulander> %s ran command %s as %s from %s
+18:39 < mulander> cwd is obtained post authentication
+18:40 < mulander> pwd is also obtained post authentication
+18:40 < mulander> so if we want to do it before authentication we can either limit our info to "%s ran command %s"
+18:40 < mulander> or we would need to move other bits around
+18:41 < mulander> which we don't really want to do, especially since they are already handled with narrowed pledge
+18:41 < mulander> initially we will add our print past line 358
+18:41 < mulander> first we check if rule->options & CONFIRM is defined
+18:42 < mulander> and print our message
+18:43 -!- Irssi: Pasting 13 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+18:43 < mulander> --- doas.c      27 May 2017 09:51:07 -0000      1.72
+18:43 < mulander> +++ doas.c      8 Jun 2017 16:43:49 -0000
+18:43 < mulander> @@ -357,6 +357,10 @@ main(int argc, char **argv)
+18:43 < mulander>                 errc(1, EPERM, NULL);
+18:43 < mulander>         }
+18:43 < mulander>  
+18:43 < mulander> +       if (rule->options & CONFIRM) {
+18:43 < mulander> +               printf("%s wants to run %s\n", myname, cmdline);
+18:43 < mulander> +       }
+18:43 < mulander> +
+18:43 < mulander>         if (!(rule->options & NOPASS)) {
+18:43 < mulander>                 if (nflag)
+18:43 < mulander>                         errx(1, "Authorization required");
+18:43 < mulander> let's see if that compiles
+18:44 < mulander> it does
+18:44 < mulander> now, doas.conf is hardcoded to /etc/doas.conf in the code
+18:44 < mulander> we can either alter our system doas.conf (not advised) or temporarly change the hardcodd path in 341 for testing
+18:44 < mulander> I'm opting for the later
+18:45 < mulander> and we are stopped for not being setuid
+18:45 < mulander> $ ./doas whoami                                                                                                                                                                                 
+18:45 < mulander> doas: not installed setuid
+18:45 < mulander> let's add suid bit to our binary
+18:46 < mulander> just setting the flag won't be enough as usr/src is mounted nosuid
+18:49 < mulander> $ doas.new whoami
+18:49 < mulander> mulander wants to run whoami
+18:49 < mulander> root
+18:50 < mulander> the steps needed to achieve that was copying ./doas into /usr/bin/doas.new
+18:50 < mulander> setting it suid (doas chmod u+s /usr/bin/doas.new)
+18:50 < mulander> and making sure the config file is owned by root
+18:51 < mulander> there was no password prompt as I was persisted from doing doas cp ./doas ;)
+18:51 < mulander> now will remove confirm from our file
+18:52 < mulander> $ doas.new whoami
+18:52 < mulander> root
+18:52 < mulander> so the option works as expected
+18:52 < mulander> now we need to see what's the idiomatic way to ask the useer a yes/no question
+18:52 < mulander> from a C utility
+18:55 < mulander> I see some apps using something called query
+18:55 < mulander> ie. src/games/robots/main.c
+18:57 < mulander> this seems to be a curses thing, we don't want that
+18:57 < mulander> must be something less insane
+18:58 < brynet> The simplest non-curses example might be check() from rm(1).
+18:59 < brynet> It is used for '-i', interactively deleting files.
+18:59 < mulander> there's nothing system wide available?
+19:00 < mulander> might aswell just call getchar there
+19:00 < brynet> I don't think so, this kind of prompting is uncommon.
+19:01 < brynet> In BSD base utilities anyway.
+19:01 < mulander> in that case I'll add a call to getchar and bail if the character is not an y or Y
+19:02 < mulander> 	first = ch = getchar();
+19:02 < mulander> 	while (ch != '\n' && ch != EOF)
+19:02 < mulander> 		ch = getchar();
+19:02 < mulander> 	return (first == 'y' || first == 'Y');
+19:02 < mulander> from rm.c
+19:02 < mulander> we will adopt this approach, call getchar until characters until EOF or newline are consumed
+19:02 < mulander> then check if the first line was y or Y
+19:02 < mulander> bail if not
+19:02 < mulander> looks like the simplest approach
+19:13 -!- Irssi: Pasting 9 lines to #openbsd-daily. Press Ctrl-K if you wish to do this or Ctrl-C to cancel.
+19:13 < mulander> $ doas.new whoami
+19:13 < mulander> mulander wants to run 'whoami'. Continue? [yN] 
+19:13 < mulander> doas: aborted by user
+19:13 < mulander> $ doas.new whoami 
+19:13 < mulander> mulander wants to run 'whoami'. Continue? [yN]N
+19:13 < mulander> doas: aborted by user
+19:13 < mulander> $ doas.new whoami 
+19:13 < mulander> mulander wants to run 'whoami'. Continue? [yN]yes
+19:13 < mulander> root
+19:14 < mulander> https://gist.github.com/mulander/48eea6664dc16be9bfb6f52015ef662d
+19:14 < mulander> our diff
+19:15 < mulander> obviously parseconfig is there as a temporary hack to ease testing
+19:16 < mulander> the trailing whitespace is just my terminal copying bonkers
+19:18 < mulander> so, if our rule is defind
+19:18 < mulander> we print a warning
+19:18 < mulander> grab the character from input and continue grabbing until EOF or newline
+19:18 < mulander> then check the first character we grabbed
+19:19 < mulander> if it's not y or Y we bail out with 'aborted by user' error message
+19:20 < mulander> apparently we can also grab pw->pw_name
+19:20 < mulander> so adding that
+19:20 < mulander> $ doas.new whoami                                                                                                                                                                               
+19:20 < mulander> mulander wants to run 'whoami' as root. Continue? [yN] n
+19:20 < mulander> doas: aborted by user
+19:22 < mulander> let's prepare a demo and a final diff
+19:24 < mulander> https://gist.github.com/mulander/1ac49b344b9be810a50d968e77bb2e13 - our example calls
+19:24 < mulander> also works from scripts
+19:24 < mulander> $ sh test.sh                                                                                                                                                                                    
+19:24 < mulander> mulander wants to run 'whoami' as root. Continue? [yN] 
+19:24 < mulander> doas: aborted by user
+19:25 < mulander> reverting our change to parseconfig
+19:27 < mulander> https://junk.tintagel.pl/doas-confirm.diff
+19:27 < mulander> this is our final diff that we can submit to tech@, we did not write a manpage yet as we don't know if this feture will be desired
+19:27 < mulander> we will mention that in our email
+19:28 < mulander> we are still under 1k lines of code, so tedu shouldn't kill us.
+19:29 < brynet> some suggestions before you submit?
+19:29 < mulander> go ahead :D
+19:30 < brynet> It might be worth checking how this interacts with doas -n (non-interactive mode), and also it appears idiomatic to fflush(stdout) before the first getchar().
+19:30 < mulander> it would still prompt on -n
+19:33 < mulander> $ doas.new -n whoami
+19:33 < mulander> mulander wants to run 'whoami' as root. Continue? [yN] 
+19:33 < mulander> sticks to prompt
+19:33 < mulander> (I added the fflush)
+19:33 < mulander> what do you think it shold do with -n?
+19:33 < mulander> ignore the prompt I asume?
+19:33 < brynet> I'd suggest it fail.
+19:33 < mulander> as in equivalent to turning confirm off
+19:34 < brynet> Rather than silently confirm.
+19:34 < mulander> hok
+19:34 < mulander> let's add that
+19:34 < mulander> -n is parsed by getopt into nflag
+19:35 < mulander> with nflag the error is
+19:35 < mulander> 72                 if (nflag)                                                                                                                                                                   
+19:35 < mulander>   1                         errx(1, "Authorization required"); 
+19:35 < mulander> we will add a similar one in CONFIRM
+19:35 < mulander> with "Confirmation required"
+19:36 < mulander> $ doas.new -n whoami                                                                                                                                                                            
+19:36 < mulander> doas: Confirmation required
+19:36 < mulander> $ echo $?
+19:36 < mulander> 1
+19:37 < mulander> updated diff https://junk.tintagel.pl/doas-confirm.1.diff
+19:38 < mulander> we have our feature implemented, I will send it off to tech@ later on
+19:38 < mulander> with that I think we're done :)
+19:38 < mulander> --- DONE ---
+

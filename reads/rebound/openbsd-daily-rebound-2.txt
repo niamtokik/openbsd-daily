@@ -1,0 +1,119 @@
+21:48 [Users #openbsd-daily]
+21:48 [@akfaew        ] [ bch           ] [ ebag         ] [ kpcyrd   ] [ owa      ] [ tarug0        ] 
+21:48 [@brynet        ] [ benpicco      ] [ edlm10       ] [ kraucrow ] [ petrus_lt] [ taschenraeuber] 
+21:48 [@dlg           ] [ biniar        ] [ electricto4d ] [ kysse    ] [ phy1729  ] [ tdjones       ] 
+21:48 [@duncaen       ] [ BlackFrog     ] [ entelechy    ] [ lteo[m]  ] [ poptart  ] [ tdmackey      ] 
+21:48 [@fcambus       ] [ bluewizard    ] [ erethon      ] [ lucias   ] [ qasa     ] [ Technaton     ] 
+21:48 [@mikeb         ] [ brianpc       ] [ fcbsd        ] [ mandarg  ] [ qbit[m]  ] [ thrym         ] 
+21:48 [@mulander      ] [ brianritchie  ] [ filwishe1    ] [ mattl    ] [ quinq    ] [ timclassic    ] 
+21:48 [@qbit          ] [ bruflu        ] [ fyuuri       ] [ metadave ] [ rabbitear] [ TuxOtaku      ] 
+21:48 [@t_b           ] [ bsdtux        ] [ geetam       ] [ mfgmfg   ] [ rain1    ] [ vbarros       ] 
+21:48 [ acgissues     ] [ cengizIO      ] [ ggg`         ] [ monsieurp] [ rajak    ] [ veonik        ] 
+21:48 [ administraitor] [ corbyhaas     ] [ ghostyy      ] [ MurphSlaw] [ rEv9     ] [ vyvup         ] 
+21:48 [ afics         ] [ daniel_adeyemo] [ harrellc00per] [ Naabed-  ] [ rnelson  ] [ whyt          ] 
+21:48 [ akkartik      ] [ davl          ] [ IcePic       ] [ nacci    ] [ S007     ] [ wilornel      ] 
+21:48 [ albongo       ] [ deei          ] [ imaginary    ] [ nacelle  ] [ sdafsd   ] [ wodim         ] 
+21:48 [ antranigv     ] [ Dhole         ] [ iomotoko     ] [ nailyk   ] [ selckin  ] [ WubTheCaptain ] 
+21:48 [ ar            ] [ dostoyesvky   ] [ jbernard     ] [ ned      ] [ skrzyp   ] [ xor29ah       ] 
+21:48 [ asie          ] [ Dowzee        ] [ jnu          ] [ Niamkik  ] [ smiles`  ] [ zyklon        ] 
+21:48 [ azend|vps     ] [ DrPete        ] [ kAworu       ] [ noexcept_] [ Soft     ] 
+21:48 [ babasik122    ] [ dsp           ] [ kittens      ] [ norakam  ] [ stateless] 
+21:48 [ bcd           ] [ DuClare       ] [ kl3          ] [ oldlaptop] [ swankier ] 
+21:48 -!- Irssi: #openbsd-daily: Total of 117 nicks [9 ops, 0 halfops, 0 voices, 108 normal]
+21:52 <@duncaen> -- code read: rebound part 2 --
+21:53 <@duncaen> the code read yesterday took longer than expected, we mostly read the first part of the rebound daemon which is the parent/monitor process
+21:54 <@duncaen> the parent process opened 4 sockets, tcp, udp for both ipv4 and ipv6, it used the reexec model to execute one child process
+21:55 <@duncaen> today we focus on the child process, yesterday we already looked a bit into it, the child process inherited the sockets the parent opened and then uses kqueue to act on events
+21:56 <@duncaen> we stopped yesterday in the kqueue event handling switch in the EVFILT_READ event on line 689 of rebound.c
+21:56 <@duncaen> https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L689
+21:57 <@duncaen> ud and ud6 are the udp sockets we are listening on, lets follow those first because this is how DNS requests are done usually
+21:57 <@duncaen> we follow the newrequest function which is declared on line 268 https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L268
+21:59 <@duncaen> first we read the dns request with recvfrom(2) from the udp socket, which is either ipv6 or ipv4
+22:00 <@duncaen> we have a pointer of the type struct dnspacket named dnsreq which points to the memory in the buffer where we write the data from recvfrom
+22:01 <@duncaen> the dnspacket struct had 6 16 bit unsigned integer fields and one variable length char array at the end
+22:03 <@duncaen> we can find some more info about dns packages in the rfc1035 https://www.rfc-editor.org/rfc/rfc1035.txt
+22:03 <@duncaen> Section 4.1.1. Header section format matches our 6 integers
+22:04 <@duncaen> QDCOUNT is interesting at this point, this is the number of names the requests asks for
+22:06 <@duncaen> ok after receiving the data we check if the packet is \0 terminated before the buffer ends, otherwise its to large to handle and we just ignore it
+22:07 <@duncaen> then we use the received data and the length to call cachelookup on line 194 https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L194
+22:08 <@duncaen> we only check for requests with just one query domain
+22:08 <@duncaen> we return NULL if it asks for multiple domains in this query
+22:09 <@duncaen> then we use the last field of our dnspacket structure the qname and copy the string into a stack buffer named origname
+22:10 <@duncaen> the lowercase function is defined in rebound.c on line 166 and just loops over the origname char array and uses tolower to make all chars lowercase
+22:12 <@duncaen> we setup a dnscache structure to use it with RB_FIND which searches our red-black tree for the exact same element
+22:12 <@duncaen> s/element/structure or maybe data
+22:13 <@duncaen> RB_FIND returns the dnscache structure found in the tree or NULL if its not found
+22:14 <@duncaen> then we copy the normalized qname which we made lowercase back into the dnsreq structure we passed to cachelookup
+22:15 <@duncaen> then cachelookup just returns the reutnr value of RB_FIND which is the cache entry or NULL
+22:15 <@duncaen> ok back where we came from line 291 https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L291
+22:17 <@duncaen> we see if the cachelookup return value is not NULL we use the dnscache struct we got from RB_FIND set the response id to the request id
+22:17 <@duncaen> then we copy the request qname to the response qname, Im not sure why this is necessary
+22:18 <@duncaen> maybe there is a hint later
+22:19 <@duncaen> then we use sendto(2) to write the response dnspacket structure we got from the cache rb tree to the datagram socket
+22:19 <@duncaen> this case was a chache hit and the request is already handled successfully and we can return and continue to wait for new events with kqueue/kevent
+22:20 <@duncaen> lets continue in the newrequest function and follow the codepath for requests that we did not cache yet
+22:20 <@duncaen> first we allocate one request structure with calloc
+22:21 <@duncaen> we set the request ts field which is a timespec to the current time and then add 30 seconds to it
+22:22 <@duncaen> we set the client field to the datagram/udp socket filedescriptor so we can answer later
+22:23 <@duncaen> we setup some more uninteresting fields in the request structure and then check if the query just asks for one domain
+22:24 <@duncaen> if this is the case we copy the qname from the dnspacket structure we received
+22:24 <@duncaen> then we use rebounds randomcase function to randomly change chars in our domain name to upper or lower case
+22:24 <@duncaen> not sure yet why this is necessary
+22:25 <@duncaen> we allocate a dnscache structure named hit and copy the request we received into it
+22:25 <@duncaen> in the hit structure we make the domain name to lower case again
+22:26 <@duncaen> we now reached the end of the if that checked if there is only one domain we query for
+22:28 <@duncaen> rebound setups a new datagram socket, this time we connect to the remote address we setup in readconfig, whcih is the ip address from the nameserver entry in the resolv.conf(5) file
+22:28 < DuClare> https://isc.sans.edu/diary/Use+of+Mixed+Case+DNS+Queries/12418
+22:28 <@brynet> tedu@'s mail also: http://marc.info/?l=openbsd-tech&m=147641372914451&w=2
+22:29 <@duncaen> then we just send(2) the buffer to the actual DNS server
+22:29 <@duncaen> the buffer cotnains the mixed case qname
+22:31 <@duncaen> ok thanks brynet and DuClare, a small trick to verify that we get the response for the query we asked for i guess we see this later again where we compare the response and see if it matches our random cases
+22:32 <@duncaen> ok thats it for the newrequest function, we just return the req structure and continue
+22:32 <@duncaen> back to line 691 https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L691
+22:34 <@duncaen> here we called newrequest, now we got the request structure back with the datagram socket filedescriptor in req->s which is conencted to the actual DNS server which we asked for the domain
+22:34 <@duncaen> we use kevent to get notified about EVFILT_READ events on this socket
+22:35 <@duncaen> lets skip the tcp next else which handles requests from tcp, this does basically the same as for udp but with tcp
+22:36 <@duncaen> the last else would be true if we got an answer from the actual DNS server over udp on the datagram socket we opened in newrequest
+22:37 <@duncaen> so this is where we read the response from the actual dns server, lets follow this codepath
+22:37 <@duncaen> we check the sendreply function defined on line 405 https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L405
+22:39 <@duncaen> this gets request structure as argument, kqueue is nice enough and allowed us earlier to associate some extra data in udata for the event we listened for
+22:39 <@duncaen> when we added the datagram socket that was connected to the DNS server we added the request structure to it
+22:40 <@duncaen> now we got the pointer to it back from kqueue as we received a new event for the fd
+22:40 <@duncaen> lets read sendreply now
+22:41 <@duncaen> we have another stack buffer and we use recv(2) to read as much data as possible that would fit into the buffer or as much as is available\
+22:42 <@duncaen> we do the same as earlier, we have a resp variable of the type struct dnspacket which points to the memory area of the buffer
+22:43 <@duncaen> we check if there is just one query in the response and then check for null termination again
+22:43 <@duncaen> and then we check if the response qname matches our requests qname, which has the randomized lower and uppercase letter
+22:43 <@duncaen> *letters
+22:44 <@duncaen> now we are sure this is the response we expected, if it is something else we just return and ignore it
+22:45 <@duncaen> we copy the original qname back into the response buffer, which is not lowercase or randomized, its what rebound was aksed for
+22:45 <@duncaen> then we use sendto(2) again to just send the data in the buffer back to the socket that asked us ealier for this domain name
+22:46 <@duncaen> you > rebound > dns server > rebound > you
+22:47 <@duncaen> you ask rebound for the domain name, rebound looks into the cache if its not found it asks the dns server, at the time the dns server asnwers rebound sets the qname to the original one and answers your request with the data it received from the actual dns server
+22:47 <@duncaen> after we answered the request, we add the response into our cache
+22:48 <@duncaen> we use RB_INSERT from tree(2) for this
+22:48 <@duncaen> there is an interesting comment, "we do this first, because there's a potential race against other requests made at the same time. if we lose, abort. if anything else goes wrong, though, we need to reverse."
+22:49 <@duncaen> this is the reason why I have read rebound a year ago already
+22:49 <@duncaen> we have to avoid that we dont add multiple cache entries for the same domain names
+22:50 <@duncaen> it could happen that we have two same requests waiting for a response from the dns server
+22:51 <@duncaen> if RB_INSERT returns something else than a null pointer we know we already added this and we just return to avoid a crash later because we would try to free the same element in our red-black cache tree multiple times
+22:52 <@duncaen> we now get the ttl from the dnspacket response struct and use it to setup the timeout for how long we want to hold the cache entry
+22:53 <@duncaen> we copy the response buffer into the cache entry structure
+22:53 <@duncaen> and then we add the cache entry to our cachefifo
+22:54 <@duncaen> using the TAILQ_INSERT_TAIL macro
+22:54 <@duncaen> ok and thats how we answer requests and add entries to the cache
+22:55 <@duncaen> back to the main workerloop we continue on line 731 https://github.com/openbsd/src/blob/master/usr.sbin/rebound/rebound.c#L731
+22:55 <@duncaen> /* burn old cache entries */
+22:56 <@duncaen> here we use a while loop and the TAILQ_FIRST to get items from our cachefifo
+22:57 <@duncaen> we use timespeccmp macro to compare two timespec fields, the caches ts which we set to the ttl of the dns response and now
+22:57 <@duncaen> if the ttl is lower or qual now we can free the cache entry
+22:59 <@duncaen> we do the same with our reqfifo which is to handle tcp dns requests which we dont read, as they need all this extra work compared to udp and the main functionallity is easier to follow with udp sockets
+22:59 <@duncaen> error the reqfifo is used for udp requests too
+23:00 <@duncaen> in newrequest we added our request structure to it
+23:00 <@duncaen> and we set the request timestamp to now + 30
+23:01 <@duncaen> so rebound waits for responses from the actual dns server for up to 30 seconds
+23:03 <@duncaen> Ok I think we are done, we could continue to read how tcp requests are handled but we read for a bit more than an hour already and it does basically the same
+23:04 <@duncaen> addition to cachefifo buring, while we free cache entries from the fifo we free them from the cache too
+23:04 <@duncaen> *burning
+23:05 <@duncaen> --- DONE ---
+
