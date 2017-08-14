@@ -1,0 +1,17 @@
+all: fetch checkout clean-checkout
+
+fetch:
+	for i in $(READS); do \
+		fetch $$i; done 
+
+checkout:
+	for i in $(SRCS); do \
+		sh ../../tools/checkout.sh src/$$i $(DATE); done
+	
+clean-checkout:
+.ifdef FULLCLEAN
+	find src -type d -name CVS -exec rm -rf "{}" \;
+.else
+	find src -type d -name CVS 
+.endif
+
