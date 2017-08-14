@@ -7,6 +7,7 @@ _checkout_with_date() {
   local source date
   source="${1}"
   date="${2}"
+
   if [ "${date}" ]
   then
     cvs ${CVS_OPTS} checkout -D"${date}" "${source}"
@@ -14,6 +15,7 @@ _checkout_with_date() {
     echo "warning: checkout last release for ${source}" 1>&2 
     cvs ${CVS_OPTS} checkout "${source}"
   fi
+
   if [ "${CLEAN}" ]
   then
     _clean "${source%%/*}"
@@ -31,9 +33,9 @@ _usage() {
   printf "Usage: %s source [date]\n" "${0}"
 }
 
-if [ "${@}" ]
+if [ "${*}" ]
 then
-  _checkout_with_date ${@}
+  _checkout_with_date ${*}
 else
   _usage
   exit 1
